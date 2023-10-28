@@ -1,0 +1,444 @@
+PlanOne:
+  company: BigInsuranceCo
+  description: 'A high-deductible plan with out-of-network coverage and an HSA feature.'
+  network_family: BIC
+  contributions:
+    employee_only: 700
+    employee_plus_one: 1000
+    family: 2500
+  HSA_funding:
+    employee_only: 1000
+    employee_plus_one: 2000
+    family: 2000
+  deductibles:
+    in_network:
+      per_member: false
+      member: 2000
+      family: 4000
+    out_of_network:
+      # left undefined as the deductible includes in and out of network
+  out_of_network_coverage: true
+  out_of_pocket_max:
+    in_network:
+      per_member: false
+      member: 3000
+      family: 7000
+    out_of_network:
+      # left undefined as the out-of-pocket max includes in and out of network
+  cost_sharing:
+    in_network:
+      preventive_care:
+        copay: 0
+        deductible_applies: false
+      primary_care:
+        coinsurance: 10
+      specialist_visit:
+        coinsurance: 10
+      outpatient_surgery:
+        coinsurance: 10
+      emergency_room:
+        copay: 150 
+      emergency_transportation:
+        coinsurance: 10
+      urgent_care:
+        coinsurance: 10
+      prescription_medicine:
+        coinsurance:
+          generic: 10
+          brand_preferred: 10
+          brand_non-preferred: 10
+          speciality: 10
+      hospital_stay:
+        coinsurance: 10
+      mental_health_outpatient:
+        coinsurance: 10
+      mental_health_inpatient:
+        coinsurance: 10
+      diagnostic_tests:
+        coinsurance: 10
+      advanced_imaging:
+        coinsurance: 10
+      prenatal_care:
+        copay: 0
+        deductible_waived: false
+      postnatal_care:
+        coinsurance: 10
+      childbirth_services:
+        coinsurance: 10
+      home_healthcare:
+        coinsurance: 10
+      rehab_outpatient:
+        coinsurance: 10
+      rehab_inpatient:
+        coinsurance: 10
+      skilled_nursing_care:
+        coinsurance: 10
+      durable_medical_equipment:
+        coinsurance: 10
+      hospice:
+        coinsurance: 10
+      child_eye_exam:
+        copay: 0
+      telehealth_visit_medical_care:
+        copay: 50
+      telehealth_visit_psychologist:
+        copay: 100
+      telehealth_visit_social_worker:
+        copay: 75
+    out_of_network:
+      preventive_care:
+        coinsurance: 20
+      primary_care:
+        coinsurance: 30
+      specialist_visit:
+        coinsurance: 30
+      outpatient_surgery:
+        coinsurance: 30
+      emergency_room:
+        copay: 150
+      emergency_transportation:
+        coinsurance: 10
+      urgent_care:
+        coinsurance: 30
+      prescription_medicine:
+        coinsurance:
+          generic: 30
+          brand_preferred: 30
+          brand_non-preferred: 30
+      hospital_stay:
+        coinsurance: 30
+      mental_health_outpatient:
+        coinsurance: 30      
+      mental_health_inpatient:
+        coinsurance: 30
+      diagnostic_tests:
+        coinsurance: 30
+      advanced_imaging:
+        coinsurance: 30
+      prenatal_care:
+        coinsurance: 20
+      postnatal_care:
+        coinsurance: 30
+      childbirth_services:
+        coinsurance: 30
+      home_healthcare:
+        coinsurance: 30
+      rehab_outpatient:
+        coinsurance: 30
+      rehab_inpatient:
+        coinsurance: 30
+      skilled_nursing_care:
+        coinsurance: 30
+      durable_medical_equipment:
+        coinsurance: 30
+      hospice:
+        coinsurance: 30
+      child_eye_exam:
+        coinsurance: 20
+      telehealth_visit_medical_care:
+        copay: 50
+      telehealth_visit_psychologist:
+        copay: 100
+      telehealth_visit_social_worker:
+        copay: 75
+PlanTwo:
+  company: Big Insurance Co
+  description: 'A plan with co-pays and a deductible that features out-of-network coverage.'
+  network_family: BIC
+  contributions:
+    employee_only: 2000
+    employee_plus_one: 5000
+    family: 8000
+  HSA_funding: null
+  deductibles:
+    in_network:
+      per_member: true
+      member: 500
+      family: 1000
+    out_of_network:
+      per_member: true
+      member: 750
+      family: 1500
+  out_of_network_coverage: true
+  out_of_pocket_max:
+    in_network:
+      per_member: true
+      member: 2500
+      family: 5000
+    out_of_network:
+      per_member: true
+      member: 4000
+      family: 8000
+  cost_sharing:
+    in_network:
+      preventive_care:
+        copay: 0
+        deductible_applies: false
+      primary_care:
+        copay: 20
+        deductible_applies: false
+      specialist_visit:
+        copay: 30
+        deductible_applies: false
+      outpatient_surgery:
+        coinsurance: 10
+      emergency_room:
+        copay: 150
+      emergency_transporation:
+        coinsurance: 10
+      urgent_care:
+        copay: 30
+        deductible_applies: false
+      prescription_medicine:
+        copay:
+          generic: 10
+          brand_preferred: 25
+          brand_non-preferred: 45
+      hospital_stay:
+        coinsurance: 10
+      mental_health_outpatient:
+        copay: 20
+        deductible_applies: false
+      mental_health_inpatient:
+        coinsurance: 10
+      diagnostic_tests:
+        coinsurance: 10
+      advanced_imaging:
+        coinsurance: 10
+      prenatal_care:
+        copay: 0
+      postnatal_care:
+        coinsurance: 10
+      childbirth_services:
+        coinsurance: 10
+      home_healthcare:
+        coinsurance: 10
+      rehab_outpatient:
+        copay: 30
+        deductible_applies: false
+      rehab_inpatient:
+        coinsurance: 10
+      skilled_nursing_care:
+        coinsurance: 10
+      durable_medical_equipment:
+        coinsurance: 10
+      hospice:
+        coinsurance: 10
+      child_eye_exam:
+        copay: 0
+        deductible_applies: false
+      telehealth_visit_medical_care:
+        copay: 20
+      telehealth_visit_psychologist:
+        copay: 20
+      telehealth_visit_social_worker:
+        copay: 20
+    out_of_network:
+      preventive_care:
+        coinsurance: 20
+      primary_care:
+        coinsurance: 20
+      specialist_visit:
+        coinsurance: 20
+      outpatient_surgery:
+        coinsurance: 30
+      emergency_room:
+        copay: 150
+      emergency_transportation:
+        coinsurance: 10
+      urgent_care:
+        coinsurance: 20
+      prescription_medicine:
+        # explicitly undefined - no out-of-network Rx benefits
+      hospital_stay:
+        coinsurance: 30
+      mental_health_outpatient:
+        coinsurance: 20  
+      mental_health_inpatient:
+        coinsurance: 30
+      diagnostic_tests:
+        coinsurance: 30
+      advanced_imaging:
+        coinsurance: 30
+      prenatal_care:
+        coinsurance: 20
+      postnatal_care:
+        coinsurance: 30
+      childbirth_services:
+        coinsurance: 30
+      home_healthcare:
+        coinsurance: 30
+      rehab_outpatient:
+        coinsurance: 20
+      rehab_inpatient:
+        coinsurance: 30
+      skilled_nursing_care:
+        coinsurance: 30
+      durable_medical_equipment:
+        coinsurance: 30
+      hospice:
+        coinsurance: 30
+      child_eye_exam:
+        coinsurance: 20
+      telehealth_visit_medical_care:
+        copay: 30
+      telehealth_visit_psychologist:
+        copay: 75
+      telehealth_visit_social_worker:
+        copay: 120
+PlanA:
+  company: Smaller Insurance Co
+  description: 'A plan with no deductible, low copays, and no out-of-network coverage.'
+  network_family: SIC
+  contributions:
+    employee_only: 2000
+    employee_plus_one: 5250
+    family: 8000
+  HSA_funding: null
+  deductibles:
+    in_network:
+      per_member: false
+      member: 0
+      family: 0
+  out_of_network_coverage: false
+  out_of_pocket_max:
+    in_network:
+      per_member: true
+      member: 2000
+      family: 4000 
+  cost_sharing:
+    in_network:
+    # no deductible, so no need for a deductible_applies flag
+      preventive_care:
+        copay: 0
+      primary_care:
+        copay: 20
+      specialist_visit:
+        copay: 20
+      outpatient_surgery:
+        copay: 150
+      emergency_room:
+        copay: 100
+      emergency_transportation:
+        copay: 0
+      urgent_care:
+        copay: 20
+      prescription_medicine:
+        copay:
+          generic: 10
+          brand_preferred: 25
+          brand_non-preferred: 45
+      hospital_stay:
+        copay: 250
+      mental_health_outpatient:
+        copay: 20
+      mental_health_inpatient:
+        copay: 250
+      diagnostic_tests:
+        copay: 0
+      advanced_imaging:
+        copay: 0
+      prenatal_care:
+        copay: 0
+      postnatal_care:
+        copay: 0
+      childbirth_services:
+        copay: 250
+      home_healthcare:
+        copay: 0
+      rehab_outpatient:
+        copay: 20
+      rehab_inpatient:
+        copay: 250
+      skilled_nursing_care:
+        copay: 250
+      durable_medical_equipment:
+        copay: 0
+      hospice:
+        copay: 0
+      child_eye_exam:
+        copay: 0
+      telehealth_visit_medical_care:
+        copay: 20
+      telehealth_visit_psychologist:
+        copay: 20
+      telehealth_visit_social_worker:
+        copay: 20
+Plan B:
+  company: Tiny Insurance Co
+  description: 'A plan with no deductible, low copays, and no out-of-network coverage.'
+  network_family: TIC
+  contributions:
+    employee_only: 1800
+    employee_plus_one: 5000
+    family: 7000
+  HSA_funding: null
+  deductibles:
+    in_network:
+      per_member: false
+      member: 0
+      family: 0
+  out_of_network_coverage: false
+  out_of_pocket_max:
+    in_network:
+      per_member: true
+      member: 3000
+      family: 6000
+  cost_sharing:
+    in_network:
+      preventive_care:
+        copay: 0
+      primary_care:
+        copay: 20
+      specialist_visit:
+        copay: 20
+      outpatient_surgery:
+        copay: 20
+      emergency_room:
+        copay: 100
+      emergency_transportation:
+        copay: 75
+      urgent_care:
+        copay: 20
+      prescription_medicine:
+        copay:
+          generic: 10
+          brand_preferred: 25
+          brand_non-preferred: 25
+          speciality: 25
+      hospital_stay:
+        copay: 250
+      mental_health_outpatient:
+        copay: 20
+      mental_health_inpatient:
+        copay: 250
+      prenatal_care:
+        copay: 0
+      postnatal_care:
+        copay: 0
+      childbirth_services:
+        copay: 250
+      home_healthcare:
+        copay: 0
+      rehab_outpatient:
+        copay: 20
+      rehab_inpatient:
+        copay: 250
+      skilled_nursing_care:
+        copay: 0
+      durable_medical_equipment:
+        coinsurance: 50
+      hospice:
+        copay: 0
+      child_eye_exam:
+        copay: 0
+      diagnostic_tests:
+        copay: 10
+      advanced_imaging:
+        copay: 50
+      telehealth_visit_medical_care:
+        copay: 0
+      telehealth_visit_psychologist:
+        copay: 0
+      telehealth_visit_social_worker:
+        copay: 0

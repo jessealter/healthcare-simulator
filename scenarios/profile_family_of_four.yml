@@ -1,0 +1,33 @@
+# Family of Four / Asthma Management
+# The family of Jane, Barbara, Phil, and Cameron prioritize their health with regular checkups and preventive care.
+# Phil manages his moderate-to-severe asthma with regular medical oversight and maintains an active lifestyle.
+Jane:
+  service_utilization:
+    in_network:
+      primary_care: 1
+  medications: {}
+Barbara:
+  service_utilization:
+    in_network:
+      primary_care: 1
+      specialist_visit: 0
+  medications: {}
+Phil:
+  service_utilization:
+    in_network:
+      primary_care: 2
+      specialist_visit: 2
+      diagnostic_tests: 1
+  medications:
+    inhaled_corticosteroids:
+      type: brand_preferred
+      frequency: 12
+    salbutamol:
+      type: generic
+      frequency: 4
+Cameron:
+  service_utilization:
+    in_network:
+      primary_care: 1
+      specialist_visit: 0
+  medications: {}

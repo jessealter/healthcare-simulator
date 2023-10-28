@@ -1,0 +1,42 @@
+# Arrival of Baby Maya to the Family of Mario and Mia
+# Mia is expecting and will require prenatal care, diagnostic tests, and childbirth services.
+# Mario will continue with his routine annual health check-ups and monthly counseling sessions.
+# Baby Maya's initial care will be categorized as primary care, and she will have routine vaccinations.
+
+Mama Mia:
+  service_utilization:
+    in_network:
+      prenatal_care: 14 # Monthly, then biweekly, then weekly visits
+      diagnostic_tests: 10 # Blood tests, urine tests, and ultrasounds
+      childbirth_services: 1 # Labor and delivery services
+      postnatal_care: 3 # Follow-up visits and recovery
+      primary_care: 1 # Annual check-up for general health maintenance
+  medications:
+    prenatal_vitamins:
+      type: generic
+      frequency: 12 # Monthly supply
+    iron_supplement:
+      type: generic
+      frequency: 6 # Second and third trimester supply
+
+Mario:
+  service_utilization:
+    in_network:
+      primary_care: 1 # Annual check-up
+      mental_health_outpatient: 12 # Monthly counseling sessions
+  medications:
+    multivitamin:
+      type: generic
+      frequency: 12 # Monthly supply
+
+Baby Maya:
+  service_utilization:
+    in_network:
+      primary_care: 6 # First year check-ups and routine care
+  medications:
+    vitamin_d_drops:
+      type: generic
+      frequency: 12 # Monthly supply for a newborn
+    routine_vaccinations:
+      type: generic
+      frequency: 4 # Standard vaccination schedule

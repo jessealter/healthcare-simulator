@@ -1,0 +1,13 @@
+# IDE/EDITOR
+.DS_Store
+
+# ENVIRONMENTS
+.venv
+.conda/
+
+# CACHE
+__pycache__/
+
+# MISC
+.ipynb_checkpoints/
+personal/

@@ -1,0 +1,147 @@
+# These figures are intended to be based on the rate negotiated by your
+# insurance company. With a plan that has a deductible, you'll be responsible
+# for the full amount listed until your deductible is met. 
+
+# The values provided here are estimates. To get a more accurate picture of your
+# potential expenses, you should review your past medical usage, seek local cost
+# estimates, or consult directly with your insurance provider.
+# Keep in mind that some services have a lot of variability in cost, so you may
+# need to provide an average or create your own service types. For example, a
+# diagnostic test could cost $75 or $750 depending on the type of test.
+
+# Note: The simulation will automatically use copay figures instead of these
+# prices when applicable. Therefore, it is important that you only enter
+# service costs here, and not copay amounts.
+
+### SERVICES ###
+preventive_care:
+  cost: 0
+primary_care:
+  cost: 195
+specialist_visit:
+  cost: 300
+outpatient_surgery:
+  cost: 1500
+emergency_room:
+  cost: 1200
+emergency_transportation:
+  cost: 400
+urgent_care:
+  cost: 250
+hospital_stay:
+  cost: 8000
+mental_health_outpatient:
+  cost: 200
+mental_health_inpatient:
+  cost: 1500
+diagnostic_tests:
+  cost: 30
+advanced_imaging:
+  cost: 500
+prenatal_care:
+  cost: 0
+postnatal_care:
+  cost: 300
+childbirth_services:
+  cost: 3000
+home_healthcare:
+  cost: 400
+rehab_outpatient:
+  cost: 350
+rehab_inpatient:
+  cost: 2000
+skilled_nursing_care:
+  cost: 250
+durable_medical_equipment:
+  cost: 150
+hospice:
+  cost: 300
+child_eye_exam:
+  cost: 0
+telehealth_visit_medical_care:
+  cost: 60
+telehealth_visit_psychologist:
+  cost: 100
+telehealth_visit_social_worker:
+  cost: 85
+
+### MEDICATIONS ###
+prescription_medicine:
+  Atorvastatin_20mg:
+    cost: 8
+  Levothyroxine_50mcg:
+    cost: 4
+  Lisinopril_10mg:
+    cost: 7
+  Metformin_500mg:
+    cost: 5
+  Amlodipine_5mg:
+    cost: 4
+  Metoprolol_50mg:
+    cost: 4
+  Omeprazole_20mg:
+    cost: 6
+  Simvastatin_20mg:
+    cost: 9
+  Losartan_50mg:
+    cost: 7
+  Albuterol_90mcg:
+    cost: 25
+  Hydrochlorothiazide_25mg:
+    cost: 4
+  Gabapentin_300mg:
+    cost: 8
+  Sertraline_50mg:
+    cost: 8
+  Montelukast_10mg:
+    cost: 9
+  Fluticasone_50mcg:
+    cost: 14
+  Amoxicillin_500mg:
+    cost: 12
+  Pantoprazole_40mg:
+    cost: 6
+  Escitalopram_10mg:
+    cost: 8
+  Pravastatin_20mg:
+    cost: 16
+  Bupropion_150mg:
+    cost: 20
+  Cetirizine_10mg:
+    cost: 4
+  Trazodone_100mg:
+    cost: 6
+  Duloxetine_30mg:
+    cost: 12
+  Warfarin_5mg:
+    cost: 4
+  Clindamycin_300mg:
+    cost: 5
+  Azithromycin_250mg:
+    cost: 1
+  prenatal_vitamins:
+    cost: 10
+  iron_supplement:
+    cost: 5
+  multivitamin:
+    cost: 7
+  vitamin_d_drops:
+    cost: 10
+  routine_vaccinations:
+    cost: 50
+  insulin:
+    cost: 150.00
+  metformin:
+    cost: 10.00
+  blood_glucose_test_strips:
+    cost: 60.00
+  lisinopril:
+    cost: 7.50
+  inhaled_corticosteroids:
+    cost: 250.00
+  salbutamol:
+    cost: 15.00
+  covid_vaccine:
+    cost: 0.00
+  flu_vaccine:
+    cost: 0.00

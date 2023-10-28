@@ -1,0 +1,15 @@
+# Alice's Minimal Healthcare Needs
+# Alice, a 25-year-old in good health, maintains her wellbeing with an annual physical and vaccinations.
+# She receives annual flu and COVID-19 shots and relies on over-the-counter remedies for occasional, minor illnesses.
+Alice:
+  service_utilization:
+    in_network:
+      primary_care: 1
+      preventive_care: 2
+  medications:
+    covid_vaccine:
+      type: brand_preferred
+      frequency: 1
+    flu_vaccine:
+      type: brand_preferred
+      frequency: 1

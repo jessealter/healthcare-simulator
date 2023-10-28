@@ -1,0 +1,27 @@
+# Steve's Comprehensive Healthcare Management
+# Steve, a single individual with type II diabetes and well-controlled hypertension, 
+# requires a comprehensive healthcare plan to manage his conditions. He regularly 
+# sees a primary care physician and an endocrinologist for his diabetes, and visits 
+# a cardiologist for hypertension management. His medication regimen includes 
+# insulin, metformin, blood glucose test strips, and Lisinopril for hypertension.
+Steve:
+  service_utilization:
+    in_network:
+      primary_care: 4                  # Quarterly visits for diabetes management with primary care physician
+      specialist_visit: 6              # Regular endocrinologist visits for specialized diabetes care
+      diagnostic_tests: 4              # Quarterly bloodwork to monitor A1C levels and other diabetes-related markers
+    out_of_network:
+      specialist_visit: 2              # Biannual visits to a cardiologist for hypertension management
+  medications:
+    insulin:
+      type: brand_preferred
+      frequency: 12                    # Monthly insulin supply for diabetes
+    metformin:
+      type: generic
+      frequency: 12                    # Daily diabetes medication, monthly supply
+    blood_glucose_test_strips:
+      type: brand_preferred
+      frequency: 12                    # Monthly supply for daily glucose level testing
+    lisinopril:
+      type: generic
+      frequency: 12                    # Monthly supply for hypertension management
