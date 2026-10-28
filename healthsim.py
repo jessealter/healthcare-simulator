@@ -466,6 +466,14 @@ class HealthcarePlan:
         category = rx_utilization_details.get("category")
         network_coverage_level = rx_utilization_details.get("network", "in_network")
 
+        # A plan without out-of-network coverage never applies an
+        # out-of-network pharmacy benefit, even if one is declared, mirroring
+        # apply_cost_sharing_service.
+        if network_coverage_level == 'out_of_network' and not self.out_of_network_coverage:
+            print("No out-of-network prescription benefit for {} (plan has no out-of-network coverage)".format(rx_name))
+            print("Member pays full price: {}".format(rx_price))
+            return rx_price
+
         rx_entry = self._prescription_entry(network_coverage_level)
         if rx_entry is None:
             print("No prescription benefit for {} at network level {}".format(rx_name, network_coverage_level))

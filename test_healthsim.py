@@ -743,3 +743,68 @@ def test_rx_generic_substitution_requires_a_cheaper_generic():
     prices["prescription_medicine"]["Generic_AB"] = {"cost": 300}  # same price as the brand
     result = simulate(plans, prices, utilization)
     assert result["cost_utilization"] == 25  # the brand tier, not the $10 generic copay
+
+
+def test_rx_out_of_network_requires_out_of_network_coverage():
+    """A plan with out_of_network_coverage: false never applies an
+    out-of-network pharmacy benefit, even if one is declared: the fill is
+    full price and credits no accumulator."""
+    plans = rx_plan(
+        {"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}},
+        deductible=2000, oop=1000,
+    )
+    plan = plans["Test Plan"]
+    # make_plan leaves out_of_network_coverage False; declare an
+    # out-of-network pharmacy table to prove it is ignored.
+    plan["cost_sharing"]["out_of_network"] = {
+        "prescription_medicine": {"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}},
+    }
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "network": "out_of_network"}}
+    )
+    sim = HealthSim(plans, make_prices(), utilization)
+    result = sim.simulate()["Test Plan"]
+    assert result["cost_utilization"] == 300  # full price, not the $25 copay
+    plan_obj = sim.healthcare_plans["Test Plan"]
+    assert plan_obj.deductibles["in_network"].get_balance() == 2000  # no deductible credit
+    assert plan_obj.out_of_pocket_max["in_network"].get_balance() == 1000  # no OOP credit
+
+
+def test_rx_out_of_network_benefit_applies_oon_rates():
+    """With out-of-network coverage on, an out-of-network fill is priced at
+    the out-of-network tier, distinct from the in-network tier."""
+    plans = rx_plan(
+        {"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}},
+        deductible=0,
+    )
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = True
+    plan["cost_sharing"]["out_of_network"] = {
+        "prescription_medicine": {"copay": {"generic": 15, "brand_preferred": 40, "brand_non-preferred": 60}},
+    }
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "network": "out_of_network"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 40  # the $40 OON copay, not $25
+
+
+def test_rx_out_of_network_no_benefit_charges_full_price():
+    """A plan with out-of-network coverage but no out-of-network pharmacy
+    entry charges full price for an out-of-network fill, crediting neither
+    the deductible nor the OOP max."""
+    plans = rx_plan(
+        {"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}},
+        deductible=2000, oop=1000,
+    )
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = True  # covered, but no OON pharmacy benefit
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "network": "out_of_network"}}
+    )
+    sim = HealthSim(plans, make_prices(), utilization)
+    result = sim.simulate()["Test Plan"]
+    assert result["cost_utilization"] == 300
+    plan_obj = sim.healthcare_plans["Test Plan"]
+    assert plan_obj.deductibles["in_network"].get_balance() == 2000
+    assert plan_obj.out_of_pocket_max["in_network"].get_balance() == 1000
