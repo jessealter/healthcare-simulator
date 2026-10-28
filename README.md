@@ -29,7 +29,7 @@ Beyond plain copay/coinsurance tables, plans can express a number of real-world 
 * **Out-of-pocket maximum exclusions** — `counts_toward_oop_max: false` for services (e.g. durable medical equipment on some HMOs) whose cost sharing neither counts toward nor is capped by the OOP max.
 * **Allowance benefits** — `max_plan_paid: X` (e.g. children's eyewear up to $150): the plan pays up to X, the member pays the excess.
 * **Prescription drug categories** — `overrides` on the prescription entry map categories (e.g. `glp1_weight_loss`, `preventive`) to their own copay/coinsurance and deductible treatment.
-* **Generic substitution** — `generic_substitution: member_pays_difference`: when the utilization profile lists a `generic_substitute` for a brand drug, cost sharing is computed on the generic price and the price difference is charged uncovered.
+* **Generic substitution** — `generic_substitution: member_pays_difference`: when the utilization profile lists a `generic_substitute` for a non-generic drug, cost sharing is computed on the generic price at the generic tier's rate and the price difference is charged uncovered. Plans without the rule ignore the field. See `scenarios/profile_brand_over_generic.yml` for a runnable example.
 * **Per-network pharmacy benefits** — prescription entries exist per network level; a plan with no out-of-network pharmacy benefit simply omits the entry there.
 
 # Limitations

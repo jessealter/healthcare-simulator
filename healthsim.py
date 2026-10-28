@@ -25,12 +25,23 @@ that may contain:
                                      utilization, so the ER line costs $0.
 * ``limit: {max: N}``               Per-member annual covered-occurrence cap
                                      (e.g. skilled nursing facility day
-                                     limits). Beyond the cap the member pays
-                                     the full price and nothing counts toward
-                                     the deductible or out-of-pocket max.
+                                     limits). Occurrences are counted per
+                                     member across both network levels, and
+                                     only covered occurrences count. When a
+                                     service declares a limit, it should use
+                                     the same value in both network entries;
+                                     the engine resolves the cap once (the
+                                     in-network entry wins) so results do not
+                                     depend on processing order. Beyond the
+                                     cap the member pays the full price and
+                                     nothing counts toward the deductible or
+                                     out-of-pocket max.
 * ``max_plan_paid: X``              Allowance benefits (e.g. children's
                                      eyewear up to $150): the plan pays up to
                                      ``X``; the member pays the excess.
+                                     Deductibles never apply to allowances,
+                                     so ``deductible_applies`` is ignored
+                                     here.
 * ``counts_toward_oop_max``         Defaults to ``true``. Set ``false`` for
                                      services the plan excludes from the
                                      out-of-pocket maximum (cost sharing
@@ -49,9 +60,9 @@ coinsurance amounts and may additionally contain:
                                      override inherits them; an override's
                                      own fields take precedence.
 * ``generic_substitution: member_pays_difference``
-                                     When a brand drug is dispensed although
-                                     a cheaper generic equivalent is
-                                     available, the plan shares cost as if
+                                     When a non-generic drug is dispensed
+                                     although a cheaper generic equivalent
+                                     is named, the plan shares cost as if
                                      the generic had been dispensed (at the
                                      generic tier's rate, unless a category
                                      override applies); the member
@@ -174,9 +185,9 @@ class ServiceRule:
     A single service's cost-sharing rule, parsed from plan data.
 
     Handles the plain copay/coinsurance mechanics as well as plan quirks:
-    admission-waived copays, per-member occurrence limits, allowance caps,
-    and out-of-pocket-maximum exclusions. See the module docstring for the
-    corresponding YAML keys.
+    admission-waived copays, allowance caps, and out-of-pocket-maximum
+    exclusions. Occurrence limits are resolved by the plan, not here. See
+    the module docstring for the corresponding YAML keys.
     """
 
     def __init__(self, service, entry):
@@ -200,11 +211,6 @@ class ServiceRule:
         )
         self.waived_if_admitted = bool(entry.get("waived_if_admitted", False))
         self.counts_toward_oop_max = bool(entry.get("counts_toward_oop_max", True))
-        limit = entry.get("limit")
-        if isinstance(limit, dict):
-            self.limit_max = limit.get("max")
-        else:
-            self.limit_max = limit
         self.max_plan_paid = entry.get("max_plan_paid")
 
     def cost_after_deductible(self, service_price):
@@ -244,12 +250,21 @@ class HealthcarePlan:
 
         self.deductibles = {}
         self.out_of_pocket_max = {}
+        # Covered occurrences the member being simulated has used so far this
+        # year, by service. A single count spans both network levels because
+        # occurrence limits are annual per-member caps.
+        self.service_occurrences = {}
 
         for network_type in ["in_network", "out_of_network"]:
             if plan_deductibles.get(network_type):
                 self._init_balances(network_type, plan_deductibles, self.deductibles)
             if plan_out_of_pocket_max.get(network_type):
                 self._init_balances(network_type, plan_out_of_pocket_max, self.out_of_pocket_max)
+
+    def reset_member_usage(self):
+        """Clears the per-member usage counters behind occurrence limits.
+        Call before simulating each member's utilization."""
+        self.service_occurrences = {}
 
     def _init_balances(self, network_type: str, plan_balances: dict, balances_dict: dict) -> None:
         """
@@ -286,6 +301,19 @@ class HealthcarePlan:
             return None
         return ServiceRule(service_type, entry)
 
+    def _service_limit_max(self, service_type):
+        """The per-member annual occurrence cap for a service, resolved
+        deterministically so results do not depend on processing order: the
+        in-network entry's limit wins, with the out-of-network entry as the
+        fallback. Returns None when neither entry declares a limit."""
+        for network_coverage_level in ("in_network", "out_of_network"):
+            entry = self.cost_sharing.get(network_coverage_level, {}).get(service_type)
+            if isinstance(entry, dict):
+                limit = entry.get("limit")
+                if limit is not None:
+                    return limit.get("max") if isinstance(limit, dict) else limit
+        return None
+
     def _balances_for(self, network_coverage_level):
         """Deductible and OOP balances for a network level, falling back to
         in-network balances for plans that combine the two."""
@@ -297,19 +325,19 @@ class HealthcarePlan:
 
     def apply_cost_sharing_service(
         self, network_coverage_level, service_type, service_price,
-        service_options=None, occurrence=1,
+        service_options=None,
     ):
         """
         Applies cost sharing to a given service price based on the network coverage level and service type.
-        This will account for adjustments based on current deductible and out-of-pocket max balances.
+        This will account for adjustments based on current deductible and out-of-pocket max balances,
+        and on how many covered occurrences of the service the current member has already used
+        (see `reset_member_usage`).
 
         Args:
             network_coverage_level (str): The level of network coverage for the service (e.g. in-network or out-of-network)
             service_type (str): The type of service.
             service_price (float): The price of the service before cost sharing.
             service_options (dict): Optional utilization details, e.g. {"admitted": true}.
-            occurrence (int): Which occurrence of the service this is for the
-                current member this year (1-based); used for day/visit limits.
 
         Returns:
             float: The price of the service after cost sharing.
@@ -328,21 +356,28 @@ class HealthcarePlan:
             # This does not count towards the deductible or out-of-pocket max.
             return service_price
 
-        # Occurrence limits (e.g. skilled nursing facility day caps): past the
-        # covered count the service is not covered at all.
-        if rule.limit_max is not None and occurrence > rule.limit_max:
-            print(
-                "Service {} occurrence {} exceeds the plan limit of {}; "
-                "member pays full price".format(service_type, occurrence, rule.limit_max)
-            )
-            return service_price
-
         # ER-style copay waived when the visit results in a hospital
         # admission. The admission is billed separately (hospital_stay), so
-        # this ER line itself costs the member nothing.
+        # this ER line itself costs the member nothing, regardless of any
+        # occurrence limit or cost sharing.
         if rule.waived_if_admitted and service_options.get("admitted"):
             print("Service {} copay waived due to hospital admission".format(service_type))
             return 0.0
+
+        # Occurrence limits (e.g. skilled nursing facility day caps) are annual
+        # per-member caps on covered occurrences, counted across both network
+        # levels. The limit is resolved once per service (in-network preferred)
+        # so results do not depend on processing order. Past the cap the
+        # service is not covered at all.
+        limit_max = self._service_limit_max(service_type)
+        used = self.service_occurrences.get(service_type, 0)
+        if limit_max is not None and used >= limit_max:
+            print(
+                "Service {} occurrence {} exceeds the plan limit of {}; "
+                "member pays full price".format(service_type, used + 1, limit_max)
+            )
+            return service_price
+        self.service_occurrences[service_type] = used + 1
 
         # Allowance benefits (e.g. children's eyewear up to $150): the plan
         # pays up to a fixed amount; the member pays the excess. Deductibles
@@ -382,11 +417,24 @@ class HealthcarePlan:
         for every rule built here, whether it comes from a tier or from a
         category override. An override's own fields take precedence.
         """
+        rule_entry = {
+            key: rx_entry[key]
+            for key in ("deductible_applies", "counts_toward_oop_max")
+            if key in rx_entry
+        }
+        override = (rx_entry.get("overrides") or {}).get(category) if category else None
+        if override is not None:
+            # The override supplies the whole rule, so neither the drug's tier
+            # nor the plan's tier table is needed.
+            rule_entry.update(override)
+            rule_name = category
+            return ServiceRule("prescription_medicine[{}]".format(rule_name), rule_entry)
+
         sharing_type = "copay" if "copay" in rx_entry else "coinsurance" if "coinsurance" in rx_entry else None
         if sharing_type is None:
             raise ValueError(
                 "Prescription cost sharing at {} needs a copay or coinsurance "
-                "tier table".format(network_coverage_level)
+                "tier table or a category override".format(network_coverage_level)
             )
         tiers = rx_entry[sharing_type]
         if tier not in tiers:
@@ -395,19 +443,8 @@ class HealthcarePlan:
                     sharing_type, tier, network_coverage_level
                 )
             )
-
-        rule_entry = {
-            key: rx_entry[key]
-            for key in ("deductible_applies", "counts_toward_oop_max")
-            if key in rx_entry
-        }
-        override = (rx_entry.get("overrides") or {}).get(category) if category else None
-        if override is not None:
-            rule_entry.update(override)
-            rule_name = category
-        else:
-            rule_entry[sharing_type] = tiers[tier]
-            rule_name = tier
+        rule_entry[sharing_type] = tiers[tier]
+        rule_name = tier
         return ServiceRule("prescription_medicine[{}]".format(rule_name), rule_entry)
 
     def apply_cost_sharing_prescription(self, rx_name, rx_utilization_details, rx_price, generic_price=None):
@@ -437,19 +474,33 @@ class HealthcarePlan:
 
         # "Member pays the difference" generic substitution: the plan shares
         # cost as if the generic had been dispensed, so the generic tier's
-        # rule applies (a category override, if any, still takes precedence).
-        # The brand/generic price difference is uncovered: no deductible or
-        # OOP credit.
+        # rule applies (a category override, if any, takes precedence). The
+        # price difference between the dispensed drug and its generic is
+        # uncovered: no deductible or OOP credit.
+        #
+        # Naming a generic_substitute on the medication is what opts it in, so
+        # any non-generic tier qualifies (brand, specialty, ...). Substitution
+        # only applies when the named substitute is actually cheaper, and it
+        # needs a way to price the generic: a category override supplies that,
+        # or else the tier table must include a generic tier. Without any of
+        # those, the dispensed drug is priced at its own tier.
+        override = (rx_entry.get("overrides") or {}).get(category) if category else None
+        sharing_type = "copay" if "copay" in rx_entry else "coinsurance" if "coinsurance" in rx_entry else None
+        can_price_generic = override is not None or (
+            sharing_type is not None and "generic" in rx_entry.get(sharing_type, {})
+        )
         difference = 0.0
         share_price = rx_price
         rule_tier = tier
         if (
             rx_entry.get("generic_substitution") == "member_pays_difference"
             and generic_price is not None
-            and tier.startswith("brand")
+            and generic_price < rx_price
+            and tier != "generic"
+            and can_price_generic
         ):
-            difference = max(0.0, rx_price - generic_price)
-            share_price = min(rx_price, generic_price)
+            difference = rx_price - generic_price
+            share_price = generic_price
             rule_tier = "generic"
 
         rule = self._build_prescription_rule(rx_entry, network_coverage_level, rule_tier, category)
@@ -548,12 +599,14 @@ class HealthSim:
             cost_premium = plan.calculate_total_premium(self.family_size)
             cost_utilization = 0
             for member, member_utilization in self.utilization.items():
-                # Reset the member balance for each deductible and out-of-pocket max
-                # when we are processing a different member's utilization.
+                # Reset the member balance for each deductible and out-of-pocket max,
+                # and the occurrence counters, when we are processing a different
+                # member's utilization.
                 for deductible in plan.deductibles.values():
                     deductible.reset_member_balance()
                 for out_of_pocket in plan.out_of_pocket_max.values():
                     out_of_pocket.reset_member_balance()
+                plan.reset_member_usage()
 
                 for coverage_level, utilization in (member_utilization.get('service_utilization') or {}).items():
                     if not utilization:
@@ -567,18 +620,17 @@ class HealthSim:
                         else:
                             count = spec
                             options = {}
-                        for occurrence in range(1, count + 1):
+                        for _ in range(count):
                             member_cost = plan.apply_cost_sharing_service(
                                 network_coverage_level=coverage_level,
                                 service_type=service,
                                 service_price=self.service_prices.get(service, {}).get("cost", 0),
                                 service_options=options,
-                                occurrence=occurrence,
                             )
                             cost_utilization += member_cost
 
                 for rx_name, rx_utilization_details in (member_utilization.get('medications') or {}).items():
-                    for occurrence in range(1, rx_utilization_details.get('frequency', 0) + 1):
+                    for _ in range(rx_utilization_details.get('frequency', 0)):
                         generic_price = None
                         substitute = rx_utilization_details.get('generic_substitute')
                         if substitute:

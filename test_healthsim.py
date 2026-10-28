@@ -1,3 +1,6 @@
+import copy
+import glob
+
 import pytest
 
 from healthsim import (
@@ -130,10 +133,9 @@ def test_coherency():
     # After the office visit, $1,850 of deductible remains. Six $300 fills go
     # entirely toward it, leaving $50 of deductible and $50 of out-of-pocket
     # maximum. The seventh fill would cost $50 (remaining deductible) + 10% of
-    # the remaining $250 (coinsurance) = $75, but the out-of-pocket maximum
-    # caps John's total year's cost at $2,000, so he pays only the last $50.
-    # (The pre-refactor simulator let the member exceed the out-of-pocket
-    # maximum here; its expected total of $2,025 encoded that bug.)
+    # the remaining $250 (coinsurance) = $75, but a member's costs never exceed
+    # the out-of-pocket maximum, so John pays only the last $50 and his total
+    # for the year is $2,000.
     expected_medication_cost = 6 * 300 + 50
     print("expected_medication_cost: ", expected_medication_cost)
 
@@ -363,13 +365,10 @@ def test_scenario_plans_simulate_all_profiles():
     raising, and produces numeric totals."""
     plans = read_healthcare_plans("scenarios/common_plans.yml")
     prices = read_service_prices("scenarios/common_prices.yml")
-    for profile in [
-        "profile_minimal_needs",
-        "profile_diabetes",
-        "profile_family_of_four",
-        "profile_new_baby",
-    ]:
-        utilization = read_utilization(f"scenarios/{profile}.yml")
+    profiles = sorted(glob.glob("scenarios/profile_*.yml"))
+    assert profiles, "no utilization profiles found under scenarios/"
+    for profile in profiles:
+        utilization = read_utilization(profile)
         results = HealthSim(plans, prices, utilization).simulate()
         assert set(results) == set(plans)
         for plan_name, result in results.items():
@@ -489,3 +488,258 @@ def test_rx_generic_substitution_keeps_category_override():
     )
     result = simulate(plans, make_prices(), utilization)
     assert result["cost_utilization"] == 5 + 200
+
+
+# ---------------------------------------------------------------------------
+# Prescription tier validation, generic substitution for any non-generic tier,
+# and occurrence limits shared across networks.
+# ---------------------------------------------------------------------------
+
+def test_rx_category_override_does_not_require_a_matching_tier():
+    """An override supplies the whole rule, so the drug's tier need not exist
+    in the plan's tier table."""
+    plans = rx_plan(
+        {
+            "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+            "overrides": {"special": {"copay": 40}},
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={"Medication_X": {"type": "speciality", "frequency": 1, "category": "special"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 40
+
+
+def test_rx_unknown_tier_without_override_raises():
+    """The tier is validated whenever no override supplies the rule."""
+    plans = rx_plan({"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}})
+    utilization = single_member(
+        medications={"Medication_X": {"type": "speciality", "frequency": 1}}
+    )
+    with pytest.raises(KeyError):
+        simulate(plans, make_prices(), utilization)
+
+
+def test_rx_generic_substitution_applies_to_specialty_tier():
+    """Naming a generic_substitute is the opt-in; the dispensed drug's tier
+    name does not have to start with 'brand'."""
+    plans = rx_plan(
+        {
+            "coinsurance": {"generic": 10, "brand_preferred": 10, "brand_non-preferred": 10, "speciality": 10},
+            "generic_substitution": "member_pays_difference",
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "speciality", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    # 10% of the $100 generic plus the $200 price difference, not 10% of $300.
+    assert result["cost_utilization"] == pytest.approx(10 + 200)
+
+
+def test_rx_generic_substitution_ignored_for_drugs_already_generic():
+    """A drug already in the generic tier has nothing to substitute."""
+    plans = rx_plan(
+        {
+            "coinsurance": {"generic": 10, "brand_preferred": 10, "brand_non-preferred": 10},
+            "generic_substitution": "member_pays_difference",
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={"Medication_X": {"type": "generic", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == pytest.approx(0.10 * 150)
+
+
+def snf_plan(out_of_network_covered):
+    """make_plan() plus a two-day skilled nursing limit at both network levels."""
+    plans = make_plan()
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = out_of_network_covered
+    plan["cost_sharing"]["out_of_network"] = {
+        "skilled_nursing_care": {"copay": 0, "limit": {"max": 2}},
+    }
+    return plans
+
+
+def test_occurrence_limit_is_shared_across_networks():
+    """limit.max is an annual per-member cap: switching networks must not
+    refill it."""
+    utilization = {
+        "John": {
+            "service_utilization": {
+                "in_network": {"skilled_nursing_care": 2},
+                "out_of_network": {"skilled_nursing_care": 1},
+            },
+            "medications": {},
+        }
+    }
+    result = simulate(snf_plan(True), make_prices(), utilization)
+    assert result["cost_utilization"] == 200  # the third day is past the cap
+
+
+def test_uncovered_days_do_not_use_up_the_occurrence_limit():
+    """A day the plan does not cover at all (no out-of-network benefit) is
+    billed in full and must not burn the in-network allowance, whichever
+    order the utilization is listed in."""
+    utilization = {
+        "John": {
+            "service_utilization": {
+                "out_of_network": {"skilled_nursing_care": 1},
+                "in_network": {"skilled_nursing_care": 2},
+            },
+            "medications": {},
+        }
+    }
+    result = simulate(snf_plan(False), make_prices(), utilization)
+    assert result["cost_utilization"] == 200  # only the uncovered out-of-network day
+
+
+def test_occurrence_limit_resets_for_each_member():
+    days = {
+        "service_utilization": {"in_network": {"skilled_nursing_care": 2}, "out_of_network": {}},
+        "medications": {},
+    }
+    result = simulate(snf_plan(True), make_prices(), {"John": days, "Michelle": days})
+    assert result["cost_utilization"] == 0  # two covered days each; the cap is per member
+
+
+def test_occurrence_limit_resolves_consistently_when_networks_differ():
+    """A service with different limits per network resolves to one cap
+    (in-network wins), so the total does not depend on processing order."""
+    plans = make_plan()
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = True
+    # make_plan already gives in-network skilled_nursing_care limit=2; give the
+    # out-of-network entry a different limit.
+    plan["cost_sharing"]["out_of_network"] = {
+        "skilled_nursing_care": {"copay": 0, "limit": {"max": 10}},
+    }
+
+    def total(order):
+        utilization = {"John": {"service_utilization": order, "medications": {}}}
+        return simulate(plans, make_prices(), utilization)["cost_utilization"]
+
+    oon_first = total({"out_of_network": {"skilled_nursing_care": 5}, "in_network": {"skilled_nursing_care": 5}})
+    in_first = total({"in_network": {"skilled_nursing_care": 5}, "out_of_network": {"skilled_nursing_care": 5}})
+    assert oon_first == in_first
+    # The in-network cap (2) governs: 2 covered days at $0, 8 at $200 each.
+    assert in_first == 8 * 200
+
+
+def test_occurrence_limit_is_one_shared_cap_when_one_network_has_no_limit():
+    """A service capped in one network but not the other still shares a single
+    annual cap, resolved deterministically regardless of processing order."""
+    plans = make_plan()
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = True
+    plan["cost_sharing"]["out_of_network"] = {"skilled_nursing_care": {"copay": 0}}  # no limit
+
+    def total(order):
+        utilization = {"John": {"service_utilization": order, "medications": {}}}
+        return simulate(plans, make_prices(), utilization)["cost_utilization"]
+
+    oon_first = total({"out_of_network": {"skilled_nursing_care": 3}, "in_network": {"skilled_nursing_care": 3}})
+    in_first = total({"in_network": {"skilled_nursing_care": 3}, "out_of_network": {"skilled_nursing_care": 3}})
+    assert oon_first == in_first == 4 * 200  # 2 covered, 4 at full $200
+
+
+def test_waived_copay_beats_occurrence_limit():
+    """An admitted visit is waived even when past the occurrence limit."""
+    plans = make_plan()
+    plan = plans["Test Plan"]
+    plan["cost_sharing"]["in_network"]["emergency_room"] = {
+        "copay": 150, "waived_if_admitted": True, "limit": {"max": 2},
+    }
+    plan_obj = HealthSim(plans, make_prices(), single_member()).healthcare_plans["Test Plan"]
+    first = plan_obj.apply_cost_sharing_service("in_network", "emergency_room", 1200, {})
+    second = plan_obj.apply_cost_sharing_service("in_network", "emergency_room", 1200, {})
+    third = plan_obj.apply_cost_sharing_service("in_network", "emergency_room", 1200, {"admitted": True})
+    assert (first, second, third) == (150, 150, 0)
+
+
+# ---------------------------------------------------------------------------
+# Shipped scenario: generic substitution end to end.
+# ---------------------------------------------------------------------------
+
+def test_brand_over_generic_profile_penalises_only_plans_with_the_rule():
+    plans = read_healthcare_plans("scenarios/common_plans.yml")
+    prices = read_service_prices("scenarios/common_prices.yml")
+    utilization = read_utilization("scenarios/profile_brand_over_generic.yml")
+    results = HealthSim(plans, prices, utilization).simulate()
+
+    # PlanOne has a member-pays-the-difference rule. Under its $2,000
+    # deductible, the $195 office visit and each of the twelve fills priced at
+    # the $90 generic are paid in full (total $1,275, well under the $3,000
+    # out-of-pocket max). Each fill also carries the uncovered gap between the
+    # $300 brand price and the $90 generic.
+    assert results["PlanOne"]["cost_utilization"] == pytest.approx(195 + 12 * 90 + 12 * (300 - 90))
+
+    # The other demo plans have no such rule, so they ignore the named
+    # substitute: a $20 office copay plus a $25 brand copay per fill.
+    for plan_name in ("PlanTwo", "PlanA", "Plan B"):
+        assert results[plan_name]["cost_utilization"] == pytest.approx(20 + 12 * 25)
+
+    # The field is what drives the difference. Without it, PlanOne prices the
+    # fills as ordinary brand coinsurance: the visit leaves $1,805 of deductible,
+    # six $300 fills use $1,800 of it, the seventh pays the last $5 plus 10% of
+    # the remaining $295, and the last five pay 10% of $300.
+    without_substitute = copy.deepcopy(utilization)
+    del without_substitute["Jordan"]["medications"]["Popular_Brand_Drug"]["generic_substitute"]
+    results = HealthSim(plans, prices, without_substitute).simulate()
+    assert results["PlanOne"]["cost_utilization"] == pytest.approx(
+        195 + 6 * 300 + (5 + 0.10 * 295) + 5 * 0.10 * 300
+    )
+
+
+def test_rx_generic_substitution_skips_when_no_generic_tier():
+    """A plan without a generic tier cannot price the substitution, so the
+    dispensed drug is priced at its own tier instead of crashing."""
+    plans = rx_plan(
+        {
+            "copay": {"brand_preferred": 25, "brand_non-preferred": 45},
+            "generic_substitution": "member_pays_difference",
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 25
+
+
+def test_rx_override_does_not_require_a_tier_table():
+    """An override supplies the whole rule, so a prescription entry that has
+    only overrides and no copay/coinsurance tier table still works."""
+    plans = rx_plan({"overrides": {"special": {"copay": 40}}})
+    utilization = single_member(
+        medications={"Medication_X": {"type": "speciality", "frequency": 1, "category": "special"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 40
+
+
+def test_rx_generic_substitution_requires_a_cheaper_generic():
+    """Naming a generic_substitute only matters when the substitute is
+    actually cheaper. An equal-priced one is not a cheaper equivalent, so the
+    dispensed drug is priced at its own tier."""
+    plans = rx_plan(
+        {
+            "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+            "generic_substitution": "member_pays_difference",
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    prices = make_prices()
+    prices["prescription_medicine"]["Generic_AB"] = {"cost": 300}  # same price as the brand
+    result = simulate(plans, prices, utilization)
+    assert result["cost_utilization"] == 25  # the brand tier, not the $10 generic copay

@@ -1,0 +1,18 @@
+# Jordan's Brand-Name Habit
+# Jordan sees a primary care physician once a year and fills a monthly
+# prescription for a brand-name drug, Popular_Brand_Drug, although a cheaper
+# generic equivalent, Generic_Equivalent, exists.
+#
+# Naming the equivalent as `generic_substitute` is what lets a plan with a
+# "member pays the difference" rule charge Jordan the price gap between the two
+# drugs. Plans without such a rule ignore the field and price the brand drug at
+# its usual tier.
+Jordan:
+  service_utilization:
+    in_network:
+      primary_care: 1
+  medications:
+    Popular_Brand_Drug:
+      type: brand_preferred
+      frequency: 12
+      generic_substitute: Generic_Equivalent
