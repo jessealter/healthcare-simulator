@@ -44,13 +44,18 @@ coinsurance amounts and may additionally contain:
                                      ``glp1_weight_loss``, ``preventive``) to
                                      a cost-sharing entry used instead of the
                                      tier amount for drugs in that category.
-* ``deductible_applies``            Plan-wide default for prescriptions.
+* ``deductible_applies``,           Plan-wide defaults for prescriptions.
+  ``counts_toward_oop_max``          Every tier rule and every category
+                                     override inherits them; an override's
+                                     own fields take precedence.
 * ``generic_substitution: member_pays_difference``
                                      When a brand drug is dispensed although
                                      a cheaper generic equivalent is
                                      available, the plan shares cost as if
-                                     the generic had been dispensed; the
-                                     member additionally pays the full price
+                                     the generic had been dispensed (at the
+                                     generic tier's rate, unless a category
+                                     override applies); the member
+                                     additionally pays the full price
                                      difference, uncovered.
 
 Utilization YAML schema
@@ -360,17 +365,23 @@ class HealthcarePlan:
         out_of_pocket_max.subtract_balance(member_cost)
         return member_cost
 
-    def get_prescription_rule(self, network_coverage_level, tier, category=None):
-        """
-        Builds the ServiceRule for a prescription, combining the plan's tier
-        table with any category override (e.g. glp1_weight_loss, preventive).
-
-        Returns (rule, rx_entry) or None when the plan has no pharmacy
-        benefit at this network level.
-        """
+    def _prescription_entry(self, network_coverage_level):
+        """The plan's prescription benefit at a network level, or None when
+        the plan has no pharmacy benefit there."""
         rx_entry = self.cost_sharing.get(network_coverage_level, {}).get("prescription_medicine")
-        if not isinstance(rx_entry, dict):
-            return None
+        return rx_entry if isinstance(rx_entry, dict) else None
+
+    def _build_prescription_rule(self, rx_entry, network_coverage_level, tier, category=None):
+        """
+        Builds the ServiceRule for a prescription from the plan's prescription
+        entry: its tier table plus any category override (e.g.
+        glp1_weight_loss, preventive).
+
+        Plan-wide prescription settings (`deductible_applies` and
+        `counts_toward_oop_max` on the prescription entry) are the defaults
+        for every rule built here, whether it comes from a tier or from a
+        category override. An override's own fields take precedence.
+        """
         sharing_type = "copay" if "copay" in rx_entry else "coinsurance" if "coinsurance" in rx_entry else None
         if sharing_type is None:
             raise ValueError(
@@ -384,15 +395,20 @@ class HealthcarePlan:
                     sharing_type, tier, network_coverage_level
                 )
             )
-        tier_entry = {sharing_type: tiers[tier]}
-        if "deductible_applies" in rx_entry:
-            tier_entry["deductible_applies"] = rx_entry["deductible_applies"]
-        rule = ServiceRule("prescription_medicine[{}]".format(tier), tier_entry)
 
+        rule_entry = {
+            key: rx_entry[key]
+            for key in ("deductible_applies", "counts_toward_oop_max")
+            if key in rx_entry
+        }
         override = (rx_entry.get("overrides") or {}).get(category) if category else None
         if override is not None:
-            rule = ServiceRule("prescription_medicine[{}]".format(category), override)
-        return rule, rx_entry
+            rule_entry.update(override)
+            rule_name = category
+        else:
+            rule_entry[sharing_type] = tiers[tier]
+            rule_name = tier
+        return ServiceRule("prescription_medicine[{}]".format(rule_name), rule_entry)
 
     def apply_cost_sharing_prescription(self, rx_name, rx_utilization_details, rx_price, generic_price=None):
         """
@@ -413,18 +429,20 @@ class HealthcarePlan:
         category = rx_utilization_details.get("category")
         network_coverage_level = rx_utilization_details.get("network", "in_network")
 
-        result = self.get_prescription_rule(network_coverage_level, tier, category)
-        if result is None:
+        rx_entry = self._prescription_entry(network_coverage_level)
+        if rx_entry is None:
             print("No prescription benefit for {} at network level {}".format(rx_name, network_coverage_level))
             print("Member pays full price: {}".format(rx_price))
             return rx_price
-        rule, rx_entry = result
 
         # "Member pays the difference" generic substitution: the plan shares
-        # cost as if the generic had been dispensed; the brand/generic price
-        # difference is uncovered (no deductible or OOP credit).
+        # cost as if the generic had been dispensed, so the generic tier's
+        # rule applies (a category override, if any, still takes precedence).
+        # The brand/generic price difference is uncovered: no deductible or
+        # OOP credit.
         difference = 0.0
         share_price = rx_price
+        rule_tier = tier
         if (
             rx_entry.get("generic_substitution") == "member_pays_difference"
             and generic_price is not None
@@ -432,7 +450,9 @@ class HealthcarePlan:
         ):
             difference = max(0.0, rx_price - generic_price)
             share_price = min(rx_price, generic_price)
+            rule_tier = "generic"
 
+        rule = self._build_prescription_rule(rx_entry, network_coverage_level, rule_tier, category)
         shared_cost = self._apply_rule(rule, share_price, network_coverage_level)
         return shared_cost + difference
 

@@ -377,3 +377,115 @@ def test_scenario_plans_simulate_all_profiles():
             assert result["cost_utilization"] >= 0
             assert result["total_cost"] >= result["cost_premium"]
 
+
+# ---------------------------------------------------------------------------
+# Prescription rule resolution: plan-wide Rx settings must reach every rule
+# built for a fill (tier, category override, generic substitution).
+# ---------------------------------------------------------------------------
+
+def rx_plan(rx_entry, deductible=2000, oop=4000):
+    """A plan whose prescription benefit is `rx_entry`, with single-pot
+    deductible and out-of-pocket max sized by the caller."""
+    plans = make_plan()
+    plan = plans["Test Plan"]
+    plan["deductibles"]["in_network"] = {"per_member": False, "member": deductible, "family": deductible}
+    plan["out_of_pocket_max"]["in_network"] = {"per_member": False, "member": oop, "family": oop}
+    plan["cost_sharing"]["in_network"]["prescription_medicine"] = rx_entry
+    return plans
+
+
+def test_rx_plan_wide_oop_exclusion_keeps_charging():
+    """A prescription benefit excluded from the OOP max keeps charging its
+    copay after the OOP max is met and never reduces it."""
+    plans = rx_plan(
+        {
+            "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+            "counts_toward_oop_max": False,
+        },
+        deductible=0,
+        oop=50,
+    )
+    utilization = single_member(
+        services={"hospital_stay": 1},  # 10% of $5,000 = $500, capped at the $50 OOP max
+        medications={"Medication_X": {"type": "generic", "frequency": 2}},
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 50 + 2 * 10
+
+
+def test_rx_override_inherits_plan_wide_deductible_default():
+    """An override that sets only coinsurance still inherits the prescription
+    entry's deductible_applies: false."""
+    plans = rx_plan(
+        {
+            "coinsurance": {"generic": 10, "brand_preferred": 30, "brand_non-preferred": 30},
+            "deductible_applies": False,
+            "overrides": {"special": {"coinsurance": 20}},
+        }
+    )
+    utilization = single_member(
+        medications={"Medication_X": {"type": "brand_preferred", "frequency": 1, "category": "special"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == pytest.approx(0.20 * 150)  # not the full $150
+
+
+def test_rx_override_fields_take_precedence_over_plan_wide_defaults():
+    """An override's own deductible_applies beats the plan-wide default."""
+    plans = rx_plan(
+        {
+            "coinsurance": {"generic": 10, "brand_preferred": 30, "brand_non-preferred": 30},
+            "deductible_applies": False,
+            "overrides": {"special": {"coinsurance": 20, "deductible_applies": True}},
+        }
+    )
+    utilization = single_member(
+        medications={"Medication_X": {"type": "brand_preferred", "frequency": 1, "category": "special"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 150  # deductible ($2,000) unmet, so full price
+
+
+def test_rx_generic_substitution_uses_generic_tier_rule():
+    """With substitution, the plan shares cost as if the generic were
+    dispensed, at the generic tier's rate, and only that copay credits the
+    out-of-pocket max; the brand/generic difference credits nothing."""
+    plans = rx_plan(
+        {
+            "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+            "generic_substitution": "member_pays_difference",
+        },
+        deductible=0,
+        oop=1000,
+    )
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    sim = HealthSim(plans, make_prices(), utilization)
+    result = sim.simulate()["Test Plan"]
+    assert result["cost_utilization"] == 10 + 200  # generic copay + ($300 - $100)
+    assert sim.healthcare_plans["Test Plan"].out_of_pocket_max["in_network"].get_balance() == 1000 - 10
+
+
+def test_rx_generic_substitution_keeps_category_override():
+    """A category override still wins when substitution applies."""
+    plans = rx_plan(
+        {
+            "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+            "generic_substitution": "member_pays_difference",
+            "overrides": {"flat": {"copay": 5}},
+        },
+        deductible=0,
+    )
+    utilization = single_member(
+        medications={
+            "Brand_AB": {
+                "type": "brand_preferred",
+                "frequency": 1,
+                "category": "flat",
+                "generic_substitute": "Generic_AB",
+            }
+        }
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 5 + 200
