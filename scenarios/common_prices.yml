@@ -58,6 +58,10 @@ hospice:
   cost: 300
 child_eye_exam:
   cost: 0
+child_eyewear:
+  # Children's glasses/contacts; plans that cover them usually pay up to an
+  # allowance and the member pays any excess.
+  cost: 250
 telehealth_visit_medical_care:
   cost: 60
 telehealth_visit_psychologist:
@@ -145,3 +149,14 @@ prescription_medicine:
     cost: 0.00
   flu_vaccine:
     cost: 0.00
+  # Demonstration medications for plan Rx features (see common_plans.yml):
+  #  - Weight_Loss_Medication: priced via a category override when the
+  #    utilization entry sets category: weight_loss_medication.
+  #  - Popular_Brand_Drug with Generic_Equivalent: pair a brand drug with
+  #    generic_substitute: Generic_Equivalent to demo member-pays-difference.
+  Weight_Loss_Medication:
+    cost: 950.00
+  Popular_Brand_Drug:
+    cost: 300.00
+  Generic_Equivalent:
+    cost: 90.00

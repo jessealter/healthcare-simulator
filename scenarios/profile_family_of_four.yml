@@ -18,6 +18,14 @@ Phil:
       primary_care: 2
       specialist_visit: 2
       diagnostic_tests: 1
+      # A structured entry: an ER visit that led to a hospital admission.
+      # Plans with waived_if_admitted charge nothing for the ER line itself;
+      # the admission is billed separately below. A plain count (e.g.
+      # "emergency_room: 1") means a visit that did NOT lead to admission.
+      emergency_room:
+        count: 1
+        admitted: true
+      hospital_stay: 1
   medications:
     inhaled_corticosteroids:
       type: brand_preferred
