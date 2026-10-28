@@ -808,3 +808,24 @@ def test_rx_out_of_network_no_benefit_charges_full_price():
     plan_obj = sim.healthcare_plans["Test Plan"]
     assert plan_obj.deductibles["in_network"].get_balance() == 2000
     assert plan_obj.out_of_pocket_max["in_network"].get_balance() == 1000
+
+
+def test_rx_out_of_network_null_benefit_charges_full_price():
+    """An explicitly null out-of-network pharmacy entry behaves like an
+    omitted one: the fill is full price with no accumulator credit."""
+    plans = rx_plan(
+        {"copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45}},
+        deductible=2000, oop=1000,
+    )
+    plan = plans["Test Plan"]
+    plan["out_of_network_coverage"] = True
+    plan["cost_sharing"]["out_of_network"] = {"prescription_medicine": None}
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "network": "out_of_network"}}
+    )
+    sim = HealthSim(plans, make_prices(), utilization)
+    result = sim.simulate()["Test Plan"]
+    assert result["cost_utilization"] == 300
+    plan_obj = sim.healthcare_plans["Test Plan"]
+    assert plan_obj.deductibles["in_network"].get_balance() == 2000
+    assert plan_obj.out_of_pocket_max["in_network"].get_balance() == 1000
