@@ -116,22 +116,27 @@ def test_coherency():
     }
 
     # Manually calculate the service costs.
-    # In this test, the medications is enough to meet the deductible, but not the out-of-pocket max.
-    # So the office visit is effectively paid at 10%.
-    expected_primary_care_cost = 0.1 * (
+    # The office visit is processed while the deductible is unmet, so John
+    # pays the full $150, which counts toward the $2,000 deductible.
+    expected_primary_care_cost = (
         simple_prices["primary_care"]["cost"]
         * simple_utilization["John"]["service_utilization"]["in_network"][
             "primary_care"
         ]
     )
-
     print("expected_primary_care_cost: ", expected_primary_care_cost)
 
-    # Add the cost of John's medications
-    expected_medication_cost = (
-        6 * 300 + (2000 - 6 * 300) + 0.1 * (300 - (2000 - 6 * 300))
-    )
+    # Add the cost of John's medications.
+    # After the office visit, $1,850 of deductible remains. Six $300 fills go
+    # entirely toward it, leaving $50 of deductible and $50 of out-of-pocket
+    # maximum. The seventh fill would cost $50 (remaining deductible) + 10% of
+    # the remaining $250 (coinsurance) = $75, but the out-of-pocket maximum
+    # caps John's total year's cost at $2,000, so he pays only the last $50.
+    # (The pre-refactor simulator let the member exceed the out-of-pocket
+    # maximum here; its expected total of $2,025 encoded that bug.)
+    expected_medication_cost = 6 * 300 + 50
     print("expected_medication_cost: ", expected_medication_cost)
+
 
     # Instantiate the HealthSim class with simple utilization
     simple_health_sim = HealthSim(simple_plans, simple_prices, simple_utilization)
@@ -152,3 +157,223 @@ def test_coherency():
     assert results[plan_name]["remaining_HSA_balance"] == 0, "incorrect remaining HSA balance"
     assert results[plan_name]["total_cost"] == expected_premium + expected_utilization_cost - 500, "incorrect total cost"
     # fmt: on
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the feature tests below.
+# ---------------------------------------------------------------------------
+
+def make_plan(**overrides):
+    """A minimal copay plan with a deductible, customizable per test."""
+    plan = {
+        "company": "QuackCare",
+        "description": "Test plan",
+        "network_family": "QC",
+        "contributions": {
+            "employee_only": 700,
+            "employee_plus_one": 1400,
+            "family": 2200,
+        },
+        "HSA_funding": None,
+        "deductibles": {
+            "in_network": {"per_member": False, "member": 2000, "family": 4000},
+        },
+        "out_of_network_coverage": False,
+        "out_of_pocket_max": {
+            "in_network": {"per_member": False, "member": 4000, "family": 8000},
+        },
+        "cost_sharing": {
+            "in_network": {
+                "preventive_care": {"copay": 0},
+                "primary_care": {"copay": 20},
+                "specialist_visit": {"copay": 30},
+                "emergency_room": {"copay": 150, "waived_if_admitted": True},
+                "hospital_stay": {"coinsurance": 10},
+                "skilled_nursing_care": {"copay": 0, "limit": {"max": 2}},
+                "durable_medical_equipment": {"copay": 100, "counts_toward_oop_max": False},
+                "child_eyewear": {"copay": 0, "max_plan_paid": 150, "counts_toward_oop_max": False},
+                "prescription_medicine": {
+                    "copay": {"generic": 10, "brand_preferred": 25, "brand_non-preferred": 45},
+                },
+            },
+        },
+    }
+    plan.update(overrides)
+    return {"Test Plan": plan}
+
+
+def make_prices(**overrides):
+    prices = {
+        "primary_care": {"cost": 150},
+        "specialist_visit": {"cost": 200},
+        "emergency_room": {"cost": 1200},
+        "hospital_stay": {"cost": 5000},
+        "skilled_nursing_care": {"cost": 200},
+        "durable_medical_equipment": {"cost": 500},
+        "child_eyewear": {"cost": 300},
+        "prescription_medicine": {
+            "Medication_X": {"cost": 150},
+            "Brand_AB": {"cost": 300},
+            "Generic_AB": {"cost": 100},
+            "GLP1_Drug": {"cost": 1000},
+        },
+    }
+    prices.update(overrides)
+    return prices
+
+
+def simulate(plans, prices, utilization):
+    return HealthSim(plans, prices, utilization).simulate()["Test Plan"]
+
+
+def single_member(services=None, medications=None):
+    return {
+        "John": {
+            "service_utilization": {"in_network": services or {}, "out_of_network": {}},
+            "medications": medications or {},
+        }
+    }
+
+
+def test_copay_bypasses_deductible_by_default():
+    """Copays apply immediately; the deductible only gates coinsurance
+    services (unless the plan says otherwise)."""
+    result = simulate(make_plan(), make_prices(), single_member(services={"primary_care": 3}))
+    assert result["cost_utilization"] == 3 * 20
+
+
+def test_copay_can_apply_after_deductible_when_plan_says_so():
+    """HDHP-style ER copay: full price until the deductible is met."""
+    plans = make_plan()
+    plans["Test Plan"]["cost_sharing"]["in_network"]["emergency_room"] = {
+        "copay": 150,
+        "deductible_applies": True,
+        "waived_if_admitted": True,
+    }
+    # Three ER visits at $1,200 each: $2,000 deductible + $150 copay + ... the
+    # first visit eats $1,200 of deductible (member pays it all), the second
+    # meets the remaining $800 then costs the $150 copay, the third is $150.
+    result = simulate(plans, make_prices(), single_member(services={"emergency_room": 3}))
+    expected = 1200 + (800 + 150) + 150
+    assert result["cost_utilization"] == expected
+
+
+def test_er_copay_waived_when_admitted():
+    prices = make_prices()
+    plans = make_plan()
+    # Not admitted: plain $150 copay.
+    result = simulate(plans, prices, single_member(services={"emergency_room": 1}))
+    assert result["cost_utilization"] == 150
+    # Admitted: ER copay waived; the admission is billed as a hospital stay.
+    result = simulate(
+        plans,
+        prices,
+        single_member(services={"emergency_room": {"count": 1, "admitted": True},
+                                "hospital_stay": 1}),
+    )
+    # ER line: $0. Hospital stay: $5,000 price against a $2,000 deductible ->
+    # $2,000 + 10% of the remaining $3,000 = $2,300.
+    assert result["cost_utilization"] == 0 + (2000 + 0.10 * 3000)
+
+
+def test_structured_entries_match_plain_counts():
+    prices = make_prices()
+    utilization = single_member(services={"primary_care": {"count": 2, "admitted": False}})
+    assert (
+        simulate(make_plan(), prices, utilization)["cost_utilization"]
+        == simulate(make_plan(), prices, single_member(services={"primary_care": 2}))["cost_utilization"]
+    )
+
+
+def test_service_occurrence_limit():
+    """Skilled nursing covered for 2 days (at $0); day 3+ is full price and
+    credits nothing."""
+    result = simulate(
+        make_plan(), make_prices(), single_member(services={"skilled_nursing_care": 3})
+    )
+    assert result["cost_utilization"] == 0 + 0 + 200
+
+
+def test_oop_excluded_service_keeps_charging():
+    """Services excluded from the OOP max keep charging after it is met and
+    never reduce it."""
+    plans = make_plan()
+    plans["Test Plan"]["out_of_pocket_max"]["in_network"] = {
+        "per_member": False, "member": 300, "family": 300,
+    }
+    # $500 DME at $100 copay: copay applies but never touches the $300 OOP
+    # max; then a $5,000 hospital stay costs the remaining $300 and stops.
+    result = simulate(
+        plans,
+        make_prices(),
+        single_member(services={"durable_medical_equipment": 1, "hospital_stay": 2}),
+    )
+    # DME: $100 (no OOP credit). Stay 1: 10% of $5,000 = $500 -> capped at
+    # the $300 OOP max. Stay 2: OOP max met -> $0. Total $400.
+    assert result["cost_utilization"] == 100 + 300 + 0
+
+
+def test_allowance_benefit():
+    """Plan pays up to $150 for children's eyewear; member pays the excess."""
+    result = simulate(make_plan(), make_prices(), single_member(services={"child_eyewear": 1}))
+    assert result["cost_utilization"] == 150
+    # Cheap frames need no contribution.
+    prices = make_prices()
+    prices["child_eyewear"] = {"cost": 100}
+    result = simulate(make_plan(), prices, single_member(services={"child_eyewear": 1}))
+    assert result["cost_utilization"] == 0
+
+
+def test_rx_category_override_bypasses_deductible():
+    """GLP-1 style override: flat copay that bypasses the deductible."""
+    plans = make_plan()
+    plans["Test Plan"]["cost_sharing"]["in_network"]["prescription_medicine"] = {
+        "coinsurance": {"generic": 10, "brand_preferred": 10, "brand_non-preferred": 10},
+        "overrides": {
+            "glp1_weight_loss": {"copay": 150, "deductible_applies": False},
+        },
+    }
+    utilization = single_member(
+        medications={"GLP1_Drug": {"type": "brand_preferred", "frequency": 1, "category": "glp1_weight_loss"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    assert result["cost_utilization"] == 150
+
+
+def test_rx_generic_substitution_member_pays_difference():
+    """Brand dispensed despite a cheaper generic: plan shares cost as if the
+    generic were dispensed; the price difference is uncovered."""
+    plans = make_plan()
+    plans["Test Plan"]["cost_sharing"]["in_network"]["prescription_medicine"] = {
+        "coinsurance": {"generic": 10, "brand_preferred": 10, "brand_non-preferred": 10},
+        "generic_substitution": "member_pays_difference",
+    }
+    utilization = single_member(
+        medications={"Brand_AB": {"type": "brand_preferred", "frequency": 1, "generic_substitute": "Generic_AB"}}
+    )
+    result = simulate(plans, make_prices(), utilization)
+    # Deductible unmet: generic $100 goes toward it; the $200 difference is
+    # uncovered. Total: $100 + $200 = $300.
+    assert result["cost_utilization"] == 300
+
+
+def test_scenario_plans_simulate_all_profiles():
+    """Schema validation: every demo plan in scenarios/common_plans.yml
+    parses and simulates against every shipped utilization profile without
+    raising, and produces numeric totals."""
+    plans = read_healthcare_plans("scenarios/common_plans.yml")
+    prices = read_service_prices("scenarios/common_prices.yml")
+    for profile in [
+        "profile_minimal_needs",
+        "profile_diabetes",
+        "profile_family_of_four",
+        "profile_new_baby",
+    ]:
+        utilization = read_utilization(f"scenarios/{profile}.yml")
+        results = HealthSim(plans, prices, utilization).simulate()
+        assert set(results) == set(plans)
+        for plan_name, result in results.items():
+            assert isinstance(result["cost_utilization"], float)
+            assert result["cost_utilization"] >= 0
+            assert result["total_cost"] >= result["cost_premium"]
+

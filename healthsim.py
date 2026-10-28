@@ -1,4 +1,81 @@
 #!/usr/bin/env python3
+"""Healthcare plan cost simulator.
+
+Compares health insurance plans by simulating a year of healthcare
+utilization for a family under each plan's cost-sharing rules.
+
+Plan YAML schema (cost_sharing entries)
+---------------------------------------
+Each service entry under ``cost_sharing.<network>.<service>`` is a mapping
+that may contain:
+
+* ``copay`` or ``coinsurance``       One of these is required. ``coinsurance``
+                                     is a percentage (e.g. ``10`` = 10%).
+* ``deductible_applies``            Whether the deductible must be met before
+                                     the plan's cost sharing begins. Defaults
+                                     to ``true`` for coinsurance and ``false``
+                                     for copays. Plans that differ (e.g. an
+                                     HDHP whose ER copay applies only after
+                                     the deductible) must set this
+                                     explicitly.
+* ``waived_if_admitted``            True for ER-style copays that are waived
+                                     when the visit results in a hospital
+                                     admission. The admission itself is
+                                     billed separately as ``hospital_stay``
+                                     utilization, so the ER line costs $0.
+* ``limit: {max: N}``               Per-member annual covered-occurrence cap
+                                     (e.g. skilled nursing facility day
+                                     limits). Beyond the cap the member pays
+                                     the full price and nothing counts toward
+                                     the deductible or out-of-pocket max.
+* ``max_plan_paid: X``              Allowance benefits (e.g. children's
+                                     eyewear up to $150): the plan pays up to
+                                     ``X``; the member pays the excess.
+* ``counts_toward_oop_max``         Defaults to ``true``. Set ``false`` for
+                                     services the plan excludes from the
+                                     out-of-pocket maximum (cost sharing
+                                     continues even after the OOP max is
+                                     met, and never reduces it).
+
+Prescription entries (``prescription_medicine``) map drug tiers to copay or
+coinsurance amounts and may additionally contain:
+
+* ``overrides``                     Mapping of drug category (e.g.
+                                     ``glp1_weight_loss``, ``preventive``) to
+                                     a cost-sharing entry used instead of the
+                                     tier amount for drugs in that category.
+* ``deductible_applies``            Plan-wide default for prescriptions.
+* ``generic_substitution: member_pays_difference``
+                                     When a brand drug is dispensed although
+                                     a cheaper generic equivalent is
+                                     available, the plan shares cost as if
+                                     the generic had been dispensed; the
+                                     member additionally pays the full price
+                                     difference, uncovered.
+
+Utilization YAML schema
+-----------------------
+Service utilization values may be a plain count (int) or a mapping:
+
+* ``{count: N, admitted: true}``    ``admitted`` activates
+                                     ``waived_if_admitted`` rules.
+
+Medication entries may extend ``type`` (tier) and ``frequency`` with:
+
+* ``category``                      Drug category for plan overrides (e.g.
+                                     ``glp1_weight_loss``, ``contraceptive``).
+* ``network``                       Defaults to ``in_network``.
+* ``generic_substitute``            Name of a cheaper equivalent drug listed
+                                     in the service prices file; activates
+                                     the plan's ``generic_substitution``
+                                     rule if one exists.
+
+Out-of-pocket handling: charges for services that are not covered (no
+out-of-network benefit, day limits exceeded, generic-substitution price
+differences, waived copays) never count toward the deductible or the
+out-of-pocket maximum, mirroring how plans treat uncovered services.
+"""
+
 import argparse
 import yaml
 
@@ -13,13 +90,16 @@ HEALTHCARE_PLANS_PATH = "examples/healthcare_plans.yml"
 SERVICE_PRICES_PATH = "examples/service_prices.yml"
 UTILIZATION_PATH = "examples/family_utilization.yml"
 
+
 def load_yaml_file(file_path):
     print(f"Reading: {file_path}")
     with open(file_path, "r") as f:
         return yaml.safe_load(f)
 
+
 def read_healthcare_plans(file_path="healthcare_plans.yml"):
     return load_yaml_file(file_path)
+
 
 def read_service_prices(file_path="service_prices.yml"):
     return load_yaml_file(file_path)
@@ -28,6 +108,7 @@ def read_service_prices(file_path="service_prices.yml"):
 def read_utilization(file_path="family_utilization.yml"):
     return load_yaml_file(file_path)
 
+
 class CostSharingBalance:
     """
     Class to manage deductibles and out-of-pocket expenses.
@@ -35,7 +116,7 @@ class CostSharingBalance:
     def __init__(self, member_amount, family_amount, per_member, family_size):
         """
         Initialize a CostSharingBalance object to manage deductibles and out-of-pocket expenses.
-        
+
         :param member_amount: The individual member's deductible or out-of-pocket amount.
         :param family_amount: The family's deductible or out-of-pocket amount.
         :param per_member: Boolean indicating if the deductible or out-of-pocket limit is per member.
@@ -48,7 +129,7 @@ class CostSharingBalance:
     def get_balance(self):
         """
         Get the balance of the deductible or out-of-pocket max.
-        
+
         When the plan rules indicate the balance is tracked per member, we
         return the lesser of the member's balance and the family's balance.
         When either is met, insurance benefits kick in.
@@ -60,8 +141,8 @@ class CostSharingBalance:
         if (self.per_member):
             return min(self.member_amount, self.family_amount)
         return self.family_amount
-            
-    
+
+
     def subtract_balance(self, expense):
         """
         Subtract an expense from the deductible or out-of-pocket max balance.
@@ -81,6 +162,53 @@ class CostSharingBalance:
         Reset the member's deductible or out-of-pocket max balance.
         """
         self.member_amount = self.member_amount_original
+
+
+class ServiceRule:
+    """
+    A single service's cost-sharing rule, parsed from plan data.
+
+    Handles the plain copay/coinsurance mechanics as well as plan quirks:
+    admission-waived copays, per-member occurrence limits, allowance caps,
+    and out-of-pocket-maximum exclusions. See the module docstring for the
+    corresponding YAML keys.
+    """
+
+    def __init__(self, service, entry):
+        if not isinstance(entry, dict) or ("copay" not in entry and "coinsurance" not in entry):
+            raise ValueError(
+                "Cost-sharing rule for {!r} must be a mapping with a 'copay' or "
+                "'coinsurance' key; got {!r}".format(service, entry)
+            )
+        if "copay" in entry:
+            self.sharing_type = "copay"
+            self.amount = entry["copay"]
+        else:
+            self.sharing_type = "coinsurance"
+            self.amount = entry["coinsurance"]
+
+        # Deductibles normally apply to coinsurance services but not to copay
+        # services. Plans whose copays apply after the deductible (common in
+        # high-deductible plans) must say so explicitly.
+        self.deductible_applies = bool(
+            entry.get("deductible_applies", self.sharing_type == "coinsurance")
+        )
+        self.waived_if_admitted = bool(entry.get("waived_if_admitted", False))
+        self.counts_toward_oop_max = bool(entry.get("counts_toward_oop_max", True))
+        limit = entry.get("limit")
+        if isinstance(limit, dict):
+            self.limit_max = limit.get("max")
+        else:
+            self.limit_max = limit
+        self.max_plan_paid = entry.get("max_plan_paid")
+
+    def cost_after_deductible(self, service_price):
+        """The member's cost for the service once cost sharing applies."""
+        if self.sharing_type == "copay":
+            # A copay never exceeds the price of the service itself.
+            return min(self.amount, service_price)
+        return service_price * (self.amount / 100)
+
 
 class HealthcarePlan:
     def __init__(
@@ -108,7 +236,7 @@ class HealthcarePlan:
         self.plan_deductibles = plan_deductibles
         self.plan_out_of_pocket_max = plan_out_of_pocket_max
         self.family_size = family_size
-        
+
         self.deductibles = {}
         self.out_of_pocket_max = {}
 
@@ -118,32 +246,54 @@ class HealthcarePlan:
             if plan_out_of_pocket_max.get(network_type):
                 self._init_balances(network_type, plan_out_of_pocket_max, self.out_of_pocket_max)
 
-    def _init_balances(self, network_type:str, plan_balances:dict, balances_dict:dict) -> None:
-            """
-            Initializes the cost sharing balances for a given network type.
+    def _init_balances(self, network_type: str, plan_balances: dict, balances_dict: dict) -> None:
+        """
+        Initializes the cost sharing balances for a given network type.
 
-            :param network_type: The type of network to initialize the balances for (in_network or out_of_network)
-            :type network_type: str
-            :param plan_balances: A dictionary containing the member and family amounts for each network type.
-            :type plan_balances: dict
-            :param balances_dict: A dictionary to store the cost sharing balances for each network type.
-            :type balances_dict: dict
+        :param network_type: The type of network to initialize the balances for (in_network or out_of_network)
+        :type network_type: str
+        :param plan_balances: A dictionary containing the member and family amounts for each network type.
+        :type plan_balances: dict
+        :param balances_dict: A dictionary to store the cost sharing balances for each network type.
+        :type balances_dict: dict
 
-            :return: None
-            :rtype: None
-            """
+        :return: None
+        :rtype: None
+        """
 
-            balances_dict[network_type] = CostSharingBalance(
-                member_amount=plan_balances[network_type]["member"],
-                family_amount=plan_balances[network_type]["family"],
-                per_member=plan_balances[network_type].get("per_member", False),
-                family_size=self.family_size,
-            )
+        balances_dict[network_type] = CostSharingBalance(
+            member_amount=plan_balances[network_type]["member"],
+            family_amount=plan_balances[network_type]["family"],
+            per_member=plan_balances[network_type].get("per_member", False),
+            family_size=self.family_size,
+        )
 
     def calculate_total_premium(self, family_size):
         return self.contributions.get(FAMILY_SIZE_MAP.get(family_size, FAMILY_SIZE_MAP[3]))
 
-    def apply_cost_sharing_service(self, network_coverage_level, service_type, service_price, deductible_applies=True):
+    def get_service_rule(self, network_coverage_level, service_type):
+        """
+        Returns the ServiceRule for a service, or None when the plan has no
+        cost-sharing entry for it (the member pays the full price, uncovered).
+        """
+        entry = self.cost_sharing.get(network_coverage_level, {}).get(service_type)
+        if entry is None:
+            return None
+        return ServiceRule(service_type, entry)
+
+    def _balances_for(self, network_coverage_level):
+        """Deductible and OOP balances for a network level, falling back to
+        in-network balances for plans that combine the two."""
+        deductible = self.deductibles.get(network_coverage_level, self.deductibles["in_network"])
+        out_of_pocket_max = self.out_of_pocket_max.get(
+            network_coverage_level, self.out_of_pocket_max["in_network"]
+        )
+        return deductible, out_of_pocket_max
+
+    def apply_cost_sharing_service(
+        self, network_coverage_level, service_type, service_price,
+        service_options=None, occurrence=1,
+    ):
         """
         Applies cost sharing to a given service price based on the network coverage level and service type.
         This will account for adjustments based on current deductible and out-of-pocket max balances.
@@ -152,158 +302,189 @@ class HealthcarePlan:
             network_coverage_level (str): The level of network coverage for the service (e.g. in-network or out-of-network)
             service_type (str): The type of service.
             service_price (float): The price of the service before cost sharing.
+            service_options (dict): Optional utilization details, e.g. {"admitted": true}.
+            occurrence (int): Which occurrence of the service this is for the
+                current member this year (1-based); used for day/visit limits.
 
         Returns:
             float: The price of the service after cost sharing.
         """
+        service_options = service_options or {}
+
         if network_coverage_level == 'out_of_network' and not self.out_of_network_coverage:
             print("Service type {} is not covered out of network".format(service_type))
             print("Member pays full price: {}".format(service_price))
             return service_price
 
-        # Get the cost-sharing type (e.g. "copay" or "coinsurance") and amount (e.g. 10% or $20)
-        try:
-            sharing_type, sharing_amount = next(iter(self.cost_sharing[network_coverage_level][service_type].items()))
-        except StopIteration:
-            print("ERROR: No cost sharing data found for network_coverage_level {}, service_type {}".format(network_coverage_level, service_type))
-            return 0
-        except KeyError:
+        rule = self.get_service_rule(network_coverage_level, service_type)
+        if rule is None:
             print("No coverage for service type {} at network level {}".format(service_type, network_coverage_level))
             print("Member pays full price: {}".format(service_price))
             # This does not count towards the deductible or out-of-pocket max.
             return service_price
 
-        # Determine the price the member pays if they've met the deductible
-        if sharing_type == 'copay':
-            cost_after_deductible = sharing_amount
-        elif sharing_type == 'coinsurance':
-            cost_after_deductible = service_price * (sharing_amount / 100)
-        else:
-            print("ERROR: Invalid cost sharing type {}".format(sharing_type))
-            return 0
+        # Occurrence limits (e.g. skilled nursing facility day caps): past the
+        # covered count the service is not covered at all.
+        if rule.limit_max is not None and occurrence > rule.limit_max:
+            print(
+                "Service {} occurrence {} exceeds the plan limit of {}; "
+                "member pays full price".format(service_type, occurrence, rule.limit_max)
+            )
+            return service_price
 
-        deductible = self.deductibles.get(network_coverage_level, self.deductibles["in_network"])
-        out_of_pocket_max = self.out_of_pocket_max.get(network_coverage_level, self.out_of_pocket_max["in_network"])
+        # ER-style copay waived when the visit results in a hospital
+        # admission. The admission is billed separately (hospital_stay), so
+        # this ER line itself costs the member nothing.
+        if rule.waived_if_admitted and service_options.get("admitted"):
+            print("Service {} copay waived due to hospital admission".format(service_type))
+            return 0.0
 
-        return self.__apply_cost_sharing(sharing_type=sharing_type,
-            sharing_amount=sharing_amount,
-            deductible_applies=deductible_applies,
-            cost_before_deductible=service_price,
-            cost_after_deductible=cost_after_deductible,
-            deductible=deductible,
-            out_of_pocket_max=out_of_pocket_max,
-        )
+        # Allowance benefits (e.g. children's eyewear up to $150): the plan
+        # pays up to a fixed amount; the member pays the excess. Deductibles
+        # do not apply to allowances.
+        if rule.max_plan_paid is not None:
+            return self._apply_allowance(rule, service_price, network_coverage_level)
 
-    def apply_cost_sharing_prescription(self, rx_name, rx_utilization_details, rx_price, deductible_applies=True):
+        return self._apply_rule(rule, service_price, network_coverage_level)
+
+    def _apply_allowance(self, rule, service_price, network_coverage_level):
+        member_cost = max(0.0, service_price - rule.max_plan_paid)
+        if member_cost <= 0:
+            return 0.0
+        if not rule.counts_toward_oop_max:
+            return member_cost
+        _, out_of_pocket_max = self._balances_for(network_coverage_level)
+        if out_of_pocket_max.get_balance() <= 0:
+            return 0.0
+        member_cost = min(member_cost, out_of_pocket_max.get_balance())
+        out_of_pocket_max.subtract_balance(member_cost)
+        return member_cost
+
+    def get_prescription_rule(self, network_coverage_level, tier, category=None):
+        """
+        Builds the ServiceRule for a prescription, combining the plan's tier
+        table with any category override (e.g. glp1_weight_loss, preventive).
+
+        Returns (rule, rx_entry) or None when the plan has no pharmacy
+        benefit at this network level.
+        """
+        rx_entry = self.cost_sharing.get(network_coverage_level, {}).get("prescription_medicine")
+        if not isinstance(rx_entry, dict):
+            return None
+        sharing_type = "copay" if "copay" in rx_entry else "coinsurance" if "coinsurance" in rx_entry else None
+        if sharing_type is None:
+            raise ValueError(
+                "Prescription cost sharing at {} needs a copay or coinsurance "
+                "tier table".format(network_coverage_level)
+            )
+        tiers = rx_entry[sharing_type]
+        if tier not in tiers:
+            raise KeyError(
+                "Plan has no {} tier {!r} for prescriptions at {}".format(
+                    sharing_type, tier, network_coverage_level
+                )
+            )
+        tier_entry = {sharing_type: tiers[tier]}
+        if "deductible_applies" in rx_entry:
+            tier_entry["deductible_applies"] = rx_entry["deductible_applies"]
+        rule = ServiceRule("prescription_medicine[{}]".format(tier), tier_entry)
+
+        override = (rx_entry.get("overrides") or {}).get(category) if category else None
+        if override is not None:
+            rule = ServiceRule("prescription_medicine[{}]".format(category), override)
+        return rule, rx_entry
+
+    def apply_cost_sharing_prescription(self, rx_name, rx_utilization_details, rx_price, generic_price=None):
         """
         Applies cost sharing to a given prescription price based on the type of medication.
 
         Args:
             rx_name (str): The name of the prescription.
-            rx_details (dict): A dictionary containing the type and frequency of the prescription.
+            rx_utilization_details (dict): Type, frequency, and optional category /
+                network / generic_substitute details of the prescription.
             rx_price (float): The price of the prescription before cost sharing.
+            generic_price (float): Price of a cheaper generic equivalent, when the
+                utilization profile lists one via `generic_substitute`.
 
         Returns:
             float: The price of the prescription after cost sharing.
         """
         tier = rx_utilization_details["type"]
+        category = rx_utilization_details.get("category")
+        network_coverage_level = rx_utilization_details.get("network", "in_network")
 
-        # Get the cost-sharing type (e.g. "copay" or "coinsurance") and the tiering structure for medications
-        # from the plan data.
-        sharing_type, tiers = next(iter(self.cost_sharing["in_network"]["prescription_medicine"].items()))
-        sharing_amount = tiers[tier]
+        result = self.get_prescription_rule(network_coverage_level, tier, category)
+        if result is None:
+            print("No prescription benefit for {} at network level {}".format(rx_name, network_coverage_level))
+            print("Member pays full price: {}".format(rx_price))
+            return rx_price
+        rule, rx_entry = result
 
-        # Determine the price the member pays if they've met the deductible
-        if sharing_type == 'copay':
-            cost_after_deductible = sharing_amount
-        elif sharing_type == 'coinsurance':
-            cost_after_deductible = rx_price * (sharing_amount / 100)
-        else:
-            print("ERROR: Invalid cost sharing type {}".format(sharing_type))
-            return 0
-        
-        network_coverage_level = "in_network"   # This simulator currently assumes all medications are in-network
-        deductible = self.deductibles.get(network_coverage_level, self.deductibles["in_network"])
-        out_of_pocket_max = self.out_of_pocket_max.get(network_coverage_level, self.out_of_pocket_max["in_network"])
+        # "Member pays the difference" generic substitution: the plan shares
+        # cost as if the generic had been dispensed; the brand/generic price
+        # difference is uncovered (no deductible or OOP credit).
+        difference = 0.0
+        share_price = rx_price
+        if (
+            rx_entry.get("generic_substitution") == "member_pays_difference"
+            and generic_price is not None
+            and tier.startswith("brand")
+        ):
+            difference = max(0.0, rx_price - generic_price)
+            share_price = min(rx_price, generic_price)
 
-        return self.__apply_cost_sharing(
-            sharing_type=sharing_type,
-            sharing_amount=sharing_amount,
-            deductible_applies=deductible_applies,
-            cost_before_deductible=rx_price,
-            cost_after_deductible=cost_after_deductible,
-            deductible=deductible,
-            out_of_pocket_max=out_of_pocket_max,
-        )
-        
+        shared_cost = self._apply_rule(rule, share_price, network_coverage_level)
+        return shared_cost + difference
 
-    def __apply_cost_sharing(
-        self,
-        sharing_type: str,
-        sharing_amount: float,
-        deductible_applies: bool,
-        cost_before_deductible: float,
-        cost_after_deductible: float,
-        deductible: CostSharingBalance,
-        out_of_pocket_max: CostSharingBalance,
-    ) -> float:
+    def _apply_rule(self, rule: ServiceRule, cost_before_deductible: float, network_coverage_level: str) -> float:
         """
-        Applies cost sharing to a given service price based on the network coverage level and service type,
-        subtracting from the deductible and out-of-pocket max balances as needed.
+        Applies a cost-sharing rule to a price, subtracting from the deductible
+        and out-of-pocket max balances as needed. The member's cost is always
+        capped at the remaining out-of-pocket maximum (unless the service is
+        excluded from it).
 
         Args:
-            deductible: The deductible balance to subtract from.
-            out_of_pocket_max: The out-of-pocket max balance to subtract from.
-            sharing_type: The type of cost sharing (e.g. copay or coinsurance).
-            cost_before_deductible: The cost of the service before the deductible is met.
-            cost_after_deductible: The cost of the service after the deductible is met.
-            sharing_amount: The amount of the cost sharing (e.g. 10% or $20).
+            rule: The cost-sharing rule to apply.
+            cost_before_deductible: The price of the service before cost sharing.
+            network_coverage_level: in_network or out_of_network.
 
         Returns:
             The cost of the service after cost sharing has been applied.
         """
-        # Case: The out-of-pocket max is met, so the member pays nothing
-        if out_of_pocket_max.get_balance() <= 0:
-            return 0
-        
-        # Case: The out-of-pocket max is about to be met, so member pays just enough to hit
-        # the out_of_pocket_max.
-        if out_of_pocket_max.get_balance() <= cost_after_deductible:
-            cost = out_of_pocket_max.get_balance()
-            out_of_pocket_max.subtract_balance(cost)
-            return cost
+        deductible, out_of_pocket_max = self._balances_for(network_coverage_level)
+        cost_after_deductible = rule.cost_after_deductible(cost_before_deductible)
 
-        # Cases:
-        # 1. The out-of-pocket max is not met, but the service is not subject to the deductible OR
-        # 2. The out-of-pocket max is not met, but the deductible is met.
-        # Member pays coinsurance/copay.
-        if deductible.get_balance() <= 0 or not deductible_applies:
-            out_of_pocket_max.subtract_balance(cost_after_deductible)
-            return cost_after_deductible
+        # Once the out-of-pocket maximum is met, covered services cost nothing.
+        if rule.counts_toward_oop_max and out_of_pocket_max.get_balance() <= 0:
+            return 0.0
 
-        # Case: The deductible is about to be met, so member pays part of the normal
-        # cost and the rest is coinsurance/copay.
-        if deductible.get_balance() <= cost_before_deductible:
-            # Determine how much is owed after paying enugh to meet the deductible
-            if sharing_type == "copay":
-                # Pay the copay unless the remaining cost of the service is less than the copay
-                # (e.g. After paying the last $90 of your deductible towards a $100 service, you
-                # would pay the last $10 off instead of paying a $20 copay to cover the $10.)
-                # This could potentially be different depending on the plan's specific rules,
-                # but the difference is negligible.
+        if deductible.get_balance() <= 0 or not rule.deductible_applies:
+            # Deductible met (or not applicable): member pays coinsurance/copay.
+            member_cost = cost_after_deductible
+            deductible_payment = 0.0
+        elif deductible.get_balance() <= cost_before_deductible:
+            # The deductible will be met by this service: pay the remaining
+            # deductible, then cost sharing on the rest.
+            if rule.sharing_type == "copay":
+                # Pay the copay unless the remaining cost of the service is
+                # less than the copay (e.g. after paying the last $90 of a
+                # deductible towards a $100 service, you pay the last $10
+                # instead of a $20 copay).
                 remainder_cost = min(cost_after_deductible, cost_before_deductible - deductible.get_balance())
-            else: # coinsurance
-                remainder_cost = (cost_before_deductible - deductible.get_balance()) * (sharing_amount / 100)
-            cost = deductible.get_balance() + remainder_cost
-            deductible.subtract_balance(cost)
-            out_of_pocket_max.subtract_balance(cost)
-            return cost
+            else:  # coinsurance
+                remainder_cost = (cost_before_deductible - deductible.get_balance()) * (rule.amount / 100)
+            deductible_payment = deductible.get_balance()
+            member_cost = deductible_payment + remainder_cost
+        else:
+            # Deductible not met by this service: member pays the full cost.
+            deductible_payment = cost_before_deductible
+            member_cost = cost_before_deductible
 
-        # Case: Neither the out-of-pocket max nor deductible are met (or will be met by this service). 
-        # Member pays the full cost.
-        deductible.subtract_balance(cost_before_deductible)
-        out_of_pocket_max.subtract_balance(cost_before_deductible)
-        return cost_before_deductible
+        if rule.counts_toward_oop_max:
+            member_cost = min(member_cost, out_of_pocket_max.get_balance())
+            out_of_pocket_max.subtract_balance(member_cost)
+        deductible.subtract_balance(min(deductible_payment, member_cost))
+        return member_cost
 
 
 def create_healthcare_plans(plan_data, family_size):
@@ -328,8 +509,9 @@ def create_healthcare_plans(plan_data, family_size):
             plan_out_of_pocket_max=details["out_of_pocket_max"],
             family_size=family_size,
         )
-        
+
     return healthcare_plans
+
 
 class HealthSim:
     def __init__(self, healthcare_plans, service_prices, utilization):
@@ -338,10 +520,10 @@ class HealthSim:
         self.family_size = len(self.utilization)
         self.healthcare_plans = create_healthcare_plans(healthcare_plans, self.family_size)
 
-    
+
     def simulate(self):
         simulation_results = {}
-        
+
         for plan_name, plan in self.healthcare_plans.items():
             cost_premium = plan.calculate_total_premium(self.family_size)
             cost_utilization = 0
@@ -353,36 +535,51 @@ class HealthSim:
                 for out_of_pocket in plan.out_of_pocket_max.values():
                     out_of_pocket.reset_member_balance()
 
-                for coverage_level, utilization in member_utilization['service_utilization'].items():
-                    if utilization is not None:
-                        for service, times in utilization.items():
-                            for _ in range(times):
-                                member_cost = plan.apply_cost_sharing_service(
-                                    network_coverage_level=coverage_level,
-                                    service_type=service,
-                                    service_price=self.service_prices.get(service, {}).get("cost", 0),
-                                    deductible_applies=self.service_prices.get(service, {}).get("deductible_applies", True),
-                                )
-                                cost_utilization += member_cost
+                for coverage_level, utilization in (member_utilization.get('service_utilization') or {}).items():
+                    if not utilization:
+                        continue
+                    for service, spec in utilization.items():
+                        # Service entries may be a plain count or a mapping
+                        # like {count: 2, admitted: true}.
+                        if isinstance(spec, dict):
+                            count = spec.get("count", 0)
+                            options = spec
+                        else:
+                            count = spec
+                            options = {}
+                        for occurrence in range(1, count + 1):
+                            member_cost = plan.apply_cost_sharing_service(
+                                network_coverage_level=coverage_level,
+                                service_type=service,
+                                service_price=self.service_prices.get(service, {}).get("cost", 0),
+                                service_options=options,
+                                occurrence=occurrence,
+                            )
+                            cost_utilization += member_cost
 
-                for rx_name, rx_utilization_details in member_utilization.get('medications', {}).items():
-                    for _ in range(rx_utilization_details['frequency']):
+                for rx_name, rx_utilization_details in (member_utilization.get('medications') or {}).items():
+                    for occurrence in range(1, rx_utilization_details.get('frequency', 0) + 1):
+                        generic_price = None
+                        substitute = rx_utilization_details.get('generic_substitute')
+                        if substitute:
+                            generic_price = (
+                                self.service_prices.get('prescription_medicine', {})
+                                .get(substitute, {})
+                                .get('cost')
+                            )
                         cost_medication = plan.apply_cost_sharing_prescription(
                             rx_name=rx_name,
                             rx_utilization_details=rx_utilization_details,
-                            rx_price = self.service_prices.get('prescription_medicine', {}).get(rx_name, {}).get('cost', 0)
+                            rx_price=self.service_prices.get('prescription_medicine', {}).get(rx_name, {}).get('cost', 0),
+                            generic_price=generic_price,
                         )
                         cost_utilization += cost_medication
 
-
-            # cost_utilization_after_HSA += plan.get_balance_after_HSA()
-            # remaining_hsa_balance += plan.get_remaining_HSA_balance()
-                            
             simulation_results[plan_name] = {
                 "cost_premium": cost_premium,
                 "cost_utilization": cost_utilization,
             }
-            
+
             simulation_results[plan_name]["cost_utilization_after_HSA"] = max(cost_utilization - plan.HSA_funding, 0)
             simulation_results[plan_name]["remaining_HSA_balance"] =  max(plan.HSA_funding - cost_utilization, 0)
             simulation_results[plan_name]["total_cost"] = (
@@ -407,4 +604,3 @@ if __name__ == "__main__":
     results = sim.simulate()
     print("The results are in!")
     print(yaml.dump(results))
-

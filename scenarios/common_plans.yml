@@ -37,7 +37,12 @@ PlanOne:
       outpatient_surgery:
         coinsurance: 10
       emergency_room:
-        copay: 150 
+        # HDHP-style ER copay: the deductible applies first, and the copay is
+        # waived entirely when the visit results in a hospital admission (the
+        # admission is billed separately as a hospital stay).
+        copay: 150
+        deductible_applies: true
+        waived_if_admitted: true
       emergency_transportation:
         coinsurance: 10
       urgent_care:
@@ -48,6 +53,20 @@ PlanOne:
           brand_preferred: 10
           brand_non-preferred: 10
           speciality: 10
+        # Drug categories: utilization entries can name a category whose rates
+        # replace the tier's. Common patterns: a flat copay for a specialty
+        # class that bypasses the deductible, and $0 preventive medications.
+        overrides:
+          weight_loss_medication:
+            copay: 150
+            deductible_applies: false
+          preventive:
+            copay: 0
+            deductible_applies: false
+        # When a brand drug is dispensed despite a cheaper generic equivalent,
+        # the plan shares cost as if the generic were dispensed and the member
+        # pays the price difference uncovered.
+        generic_substitution: member_pays_difference
       hospital_stay:
         coinsurance: 10
       mental_health_outpatient:
@@ -60,7 +79,7 @@ PlanOne:
         coinsurance: 10
       prenatal_care:
         copay: 0
-        deductible_waived: false
+        deductible_applies: false
       postnatal_care:
         coinsurance: 10
       childbirth_services:
@@ -96,6 +115,8 @@ PlanOne:
         coinsurance: 30
       emergency_room:
         copay: 150
+        deductible_applies: true
+        waived_if_admitted: true
       emergency_transportation:
         coinsurance: 10
       urgent_care:
@@ -105,6 +126,7 @@ PlanOne:
           generic: 30
           brand_preferred: 30
           brand_non-preferred: 30
+        generic_substitution: member_pays_difference
       hospital_stay:
         coinsurance: 30
       mental_health_outpatient:
@@ -184,7 +206,8 @@ PlanTwo:
         coinsurance: 10
       emergency_room:
         copay: 150
-      emergency_transporation:
+        waived_if_admitted: true
+      emergency_transportation:
         coinsurance: 10
       urgent_care:
         copay: 30
@@ -322,6 +345,9 @@ PlanA:
       emergency_transportation:
         copay: 0
       urgent_care:
+        # HMO quirk: out-of-network urgent care is often covered at the
+        # in-network rate when you are outside the plan's service area. The
+        # simulator has no geography, so list such visits as in-network.
         copay: 20
       prescription_medicine:
         copay:
@@ -406,6 +432,14 @@ Plan B:
           brand_preferred: 25
           brand_non-preferred: 25
           speciality: 25
+        # Category overrides: no-cost contraceptives and preventive drugs.
+        overrides:
+          contraceptive:
+            copay: 0
+            deductible_applies: false
+          preventive:
+            copay: 0
+            deductible_applies: false
       hospital_stay:
         copay: 250
       mental_health_outpatient:
@@ -426,12 +460,25 @@ Plan B:
         copay: 250
       skilled_nursing_care:
         copay: 0
+        # Day caps are common: covered for the first N days per benefit
+        # period, full price thereafter.
+        limit: {max: 100}
       durable_medical_equipment:
+        # Some HMOs exclude certain cost sharing from the out-of-pocket
+        # maximum: it never reduces the OOP max and keeps charging after it.
         coinsurance: 50
+        counts_toward_oop_max: false
       hospice:
         copay: 0
       child_eye_exam:
         copay: 0
+      # Allowance benefit: the plan pays up to $150 toward children's
+      # glasses or contacts (per benefit period — your utilization profile
+      # decides how often to invoke it); the member pays the excess.
+      child_eyewear:
+        copay: 0
+        max_plan_paid: 150
+        counts_toward_oop_max: false
       diagnostic_tests:
         copay: 10
       advanced_imaging:
